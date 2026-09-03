@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SFTV Transmitter (Flipper)</title>
+<link rel="stylesheet" href="css/common.css">
+<style>
+  .flipper { width: 300px; height: 520px; }
+  .flipper .screen { left: 8.3%; top: 8.4%; width: 83.4%; height: 26.5%; background: #e8622a1a; border-radius: 3px; }
+  .flipper .screen canvas { background: #fb7a3c; } /* Flipper orange-ish LCD */
+  #led { transition: fill .05s; }
+</style>
+</head><body>
+<div class="wrap">
+  <div class="device flipper">
+    <svg viewBox="0 0 240 416" fill="none" stroke="#e8622a" stroke-width="3">
+      <rect x="6" y="6" width="228" height="404" rx="26"/>
+      <rect x="20" y="35" width="200" height="110" rx="4"/>
+      <circle id="led" cx="120" cy="168" r="7" fill="#333" stroke="none"/>
+      <!-- 5-way pad -->
+      <circle class="btn" id="ok" cx="120" cy="300" r="30" stroke="#e8622a"/>
+      <text x="120" y="305" text-anchor="middle" fill="#e8622a" stroke="none" font-size="14">OK</text>
+      <path class="btn" id="up"    d="M120 232 l14 22 h-28 z" stroke="#e8622a"/>
+      <path class="btn" id="down"  d="M120 368 l14 -22 h-28 z" stroke="#e8622a"/>
+      <path class="btn" id="left"  d="M52 300 l22 14 v-28 z" stroke="#e8622a"/>
+      <path class="btn" id="right" d="M188 300 l-22 14 v-28 z" stroke="#e8622a"/>
+      <circle class="btn" id="back" cx="120" cy="380" r="0"/>
+    </svg>
+    <div class="screen"><canvas id="lcd" width="400" height="240"></canvas></div>
+  </div>
+  <div class="bar">
+    <label class="act">Load picture<input id="file" type="file" accept="image/*" hidden></label>
+    <button class="act" id="send">Send ▶</button>
+    <button class="act" id="stop">Stop ◼</button>
+  </div>
+  <p class="hint">Arrows switch pictures, OK/Send plays it as sound. Put the speaker near the receiver's mic. First send needs a click (browser audio policy).</p>
+</div>
+<script type="module" src="js/ui/tx-ui.js"></script>
+</body></html>

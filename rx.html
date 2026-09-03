@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SFTV Receiver (Playdate)</title>
+<link rel="stylesheet" href="css/common.css">
+<style>
+  .playdate { width: 360px; height: 400px; }
+  .playdate .screen { left: 8.3%; top: 7.5%; width: 83.4%; height: 45%; background: #b7c0ad; border-radius: 4px; }
+  .playdate .screen canvas { background: #b7c0ad; }
+</style>
+</head><body>
+<div class="wrap">
+  <div class="device playdate">
+    <svg viewBox="0 0 360 400" fill="none" stroke="#111" stroke-width="3">
+      <rect x="6" y="6" width="348" height="388" rx="30" fill="#f4c20a" stroke="#111"/>
+      <rect x="30" y="30" width="300" height="180" rx="5" fill="#8f9a83" stroke="#111"/>
+      <!-- d-pad -->
+      <g stroke="#111" fill="#f4c20a">
+        <rect class="btn" id="up"    x="72" y="270" width="26" height="26" rx="4"/>
+        <rect class="btn" id="down"  x="72" y="322" width="26" height="26" rx="4"/>
+        <rect class="btn" id="left"  x="46" y="296" width="26" height="26" rx="4"/>
+        <rect class="btn" id="right" x="98" y="296" width="26" height="26" rx="4"/>
+      </g>
+      <circle class="btn" id="b" cx="268" cy="322" r="18" fill="#f4c20a" stroke="#111"/>
+      <circle class="btn" id="a" cx="312" cy="300" r="18" fill="#f4c20a" stroke="#111"/>
+      <text x="268" y="327" text-anchor="middle" stroke="none" fill="#111" font-size="14">B</text>
+      <text x="312" y="305" text-anchor="middle" stroke="none" fill="#111" font-size="14">A</text>
+      <!-- crank -->
+      <path d="M354 120 h18 v70 h-30" stroke="#111" fill="none"/>
+    </svg>
+    <div class="screen"><canvas id="pd" width="400" height="240"></canvas></div>
+  </div>
+  <div class="bar">
+    <button class="act" id="listen">Allow mic &amp; listen</button>
+    <button class="act" id="clear">Clear (A)</button>
+    <button class="act" id="panel">Panel (▶)</button>
+    <a class="act" id="save" style="display:none">Save PNG</a>
+  </div>
+  <p class="hint">Click listen and allow the microphone. Point a transmitter (this site in another tab, or a real Flipper) at the mic. The dolphin opens its mouth when it hears a signal.</p>
+</div>
+<script type="module" src="js/ui/rx-ui.js"></script>
+</body></html>
