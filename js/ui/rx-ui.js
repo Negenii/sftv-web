@@ -46,9 +46,8 @@ function makeRx() {
     onPreview(layer, chunk, nb, data) {
       if (layer === 0) { tinyBits.set(data.subarray(0, nb), chunk * P.PREVIEW_CHUNK); tinyHave[chunk] = 1; }
       else if (layer === 1) { previewBits.set(data.subarray(0, nb), chunk * P.PREVIEW_CHUNK); previewHave[chunk] = 1; }
-      if (!started) started = true;
     },
-    onMeta(nm, isEnd) { if (isEnd) { finished = true; } else { clearImageKeep(); started = true; name = nm; } },
+    onMeta(nm, isEnd) { if (isEnd) { finished = true; } else { clearImageKeep(); name = nm; } },
   });
 }
 function clearImageKeep() { /* new pass starts: keep nothing */ img.fill(0); segSeen.fill(0); previewBits.fill(0); previewHave.fill(0); tinyBits.fill(0); tinyHave.fill(0); started = false; finished = false; linesReached = 0; }
