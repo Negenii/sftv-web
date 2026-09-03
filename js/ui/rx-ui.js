@@ -80,18 +80,23 @@ function drawPreviewInto(x0, y0, w, h) {
     if (px(src, sw, lb, x, y)) g.fillRect(x0 + x * sx, y0 + y * sy, Math.ceil(sx), Math.ceil(sy));
 }
 
+// console.png is 140x118; its screen interior is at (7,7) size 88x53 (from the Playdate app).
+const CONSOLE = { w: 140, h: 118, sx: 7, sy: 7, sw: 88, sh: 53 };
 function drawScene() {
   g.fillStyle = '#b7c0ad'; g.fillRect(0, 0, 400, 240);
   const hearing = !started && performance.now() - hearingMs < 500;
   const dol = (hearing && assets.dolphin_open.complete) ? assets.dolphin_open : assets.dolphin;
-  if (dol.complete) g.drawImage(dol, 20, 70, 71 * 1.6, 49 * 1.6);
-  if (assets.console.complete) {
-    const cx = 210, cy = 40;
-    g.drawImage(assets.console, cx, cy, 140, 118);
-    if (started || previewHave.some((v) => v) || tinyHave.some((v) => v)) drawPreviewInto(cx + 10, cy + 10, 122, 74);
-  }
-  g.fillStyle = '#111'; g.font = '14px system-ui';
-  g.fillText(hearing ? 'signal…' : 'Listening', 150, 205);
+  if (dol.complete) g.drawImage(dol, 16, 78, 71 * 1.5, 49 * 1.5);
+  const scale = 1.35;
+  const cw = CONSOLE.w * scale, ch = CONSOLE.h * scale;
+  const cx = 400 - cw - 14, cy = 26;
+  const sx = cx + CONSOLE.sx * scale, sy = cy + CONSOLE.sy * scale, sw = CONSOLE.sw * scale, sh = CONSOLE.sh * scale;
+  if (assets.console.complete) g.drawImage(assets.console, cx, cy, cw, ch);
+  // overwrite the console's screen with a light LCD and draw the preview on top
+  g.fillStyle = '#c7d0bd'; g.fillRect(sx, sy, sw, sh);
+  if (previewHave.some((v) => v) || tinyHave.some((v) => v)) drawPreviewInto(sx, sy, sw, sh);
+  g.fillStyle = '#111'; g.font = '13px system-ui';
+  g.fillText(hearing ? 'signal…' : 'Listening', 20, 210);
 }
 
 function drawImage() {
@@ -119,11 +124,19 @@ function drawPanel() {
   for (const [k, v] of rows) { g.fillText(k, 258, y); g.fillText(String(v), 392 - g.measureText(String(v)).width, y); y += 20; }
 }
 
+function drawHud() {
+  const tc = tinyHave.reduce((a, v) => a + v, 0), pc = previewHave.reduce((a, v) => a + v, 0);
+  const st = demod ? demod.status() : { tone: -2, level: 0 };
+  const line = `f=${demod ? demod.frames : 0} ok=${rx ? rx.framesOk : 0} bad=${rx ? rx.framesBad : 0} tiny=${tc}/4 prev=${pc}/20 st=${started ? 1 : 0} tone=${st.tone} lvl=${st.level.toFixed(2)}`;
+  g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, 400, 14);
+  g.fillStyle = '#0f0'; g.font = '10px monospace'; g.fillText(line, 2, 11);
+}
 function tick() {
   if (!demod) { drawScene(); }
   else if (started || finished) { drawImage(); }
   else { drawScene(); }
   if (showPanel && demod) drawPanel();
+  drawHud();
   requestAnimationFrame(tick);
 }
 tick();
