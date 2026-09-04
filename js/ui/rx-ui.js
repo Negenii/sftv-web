@@ -139,33 +139,13 @@ function drawPanel() {
   for (const [k, v] of rows) { g.fillText(k, 258, y); g.fillText(String(v), 392 - g.measureText(String(v)).width, y); y += 20; }
 }
 
+// Status line lives under the device, not on the LCD (the real Playdate shows none of this).
+const hudEl = document.getElementById('hud');
 function drawHud() {
+  if (!hudEl) return;
   const tc = tinyHave.reduce((a, v) => a + v, 0), pc = previewHave.reduce((a, v) => a + v, 0);
   const st = demod ? demod.status() : { tone: -2, level: 0 };
-  const line = `f=${demod ? demod.frames : 0} ok=${rx ? rx.framesOk : 0} bad=${rx ? rx.framesBad : 0} tiny=${tc}/4 prev=${pc}/20 st=${started ? 1 : 0} tone=${st.tone} lvl=${st.level.toFixed(2)}`;
-  g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, 400, 14);
-  g.fillStyle = '#0f0'; g.font = '10px monospace'; g.fillText(line, 2, 11);
-}
-function drawNote() {
-  g.fillStyle = '#b8b19a'; g.fillRect(0, 0, 400, 240);
-  g.fillStyle = '#fffdf5'; g.fillRect(24, 24, 352, 192);
-  g.strokeStyle = '#000'; g.strokeRect(24, 24, 352, 192);
-  g.beginPath(); g.moveTo(360, 24); g.lineTo(376, 40); g.lineTo(360, 40); g.closePath(); g.fillStyle = '#000'; g.fill();
-  g.fillStyle = '#000'; g.font = '18px system-ui'; g.textBaseline = 'top';
-  const words = noteText.split(/\s+/); let line = '', y = 40;
-  for (const w of words) {
-    const cand = line ? line + ' ' + w : w;
-    if (g.measureText(cand).width > 320 && line) { g.fillText(line, 40, y); y += 22; line = w; }
-    else line = cand;
-    if (y > 196) break;
-  }
-  if (line && y <= 196) g.fillText(line, 40, y);
-}
-function drawNoteBanner() {
-  if (!paused) return;
-  g.fillStyle = 'rgba(0,0,0,.85)'; const t = 'Paused - waiting for sender';
-  g.font = '14px system-ui'; const w = g.measureText(t).width + 24;
-  g.fillRect((400 - w) / 2, 8, w, 26); g.fillStyle = '#fff'; g.textBaseline = 'top'; g.fillText(t, (400 - w) / 2 + 12, 14);
+  hudEl.textContent = `frames ${demod ? demod.frames : 0} · ok ${rx ? rx.framesOk : 0} · bad ${rx ? rx.framesBad : 0} · tiny ${tc}/4 · preview ${pc}/20 · tone ${st.tone} · level ${st.level.toFixed(2)}`;
 }
 function tick() {
   if (!demod) { drawScene(); }

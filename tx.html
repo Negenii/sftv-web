@@ -4,29 +4,34 @@
 <title>SFTV Transmitter (Flipper)</title>
 <link rel="stylesheet" href="css/common.css">
 <style>
-  .flipper { width: 300px; height: 520px; }
-  .flipper .screen { left: 8.3%; top: 8.4%; width: 83.4%; height: 26.5%; background: #e8622a1a; border-radius: 3px; }
-  .flipper .screen canvas { background: #fb7a3c; } /* Flipper orange-ish LCD */
+  /* real Flipper Zero: 100 x 40 mm landscape body, 128x64 LCD ~32 x 16 mm; page scale 5 px/mm */
+  .flipper { width: 500px; height: 200px; }
+  .flipper .screen { left: 7%; top: 20%; width: 32%; height: 40%; background: #f39a52; border-radius: 2px; }
+  .flipper .screen canvas { background: #f39a52; }
   #led { transition: fill .05s; }
 </style>
 </head><body>
 <nav class="topnav"><a class="tx active" href="tx.html">Flipper · Send</a><a class="rx" href="rx.html">Playdate · Receive</a></nav>
 <div class="wrap">
   <div class="device flipper">
-    <svg viewBox="0 0 240 416" fill="none" stroke="#e8622a" stroke-width="3">
-      <rect x="6" y="6" width="228" height="404" rx="26"/>
-      <rect x="20" y="35" width="200" height="110" rx="4"/>
-      <circle id="led" cx="120" cy="168" r="7" fill="#333" stroke="none"/>
+    <svg viewBox="0 0 100 40">
+      <rect x="0.5" y="0.5" width="99" height="39" rx="6" fill="#f26b21" stroke="#222" stroke-width="0.6"/>
+      <!-- LCD window -->
+      <rect x="6" y="7" width="34" height="18" rx="1" fill="#141414"/>
+      <!-- RGB notification LED -->
+      <circle id="led" cx="44" cy="8.5" r="1.3" fill="#333"/>
       <!-- 5-way pad -->
-      <circle class="btn" id="ok" cx="120" cy="300" r="30" stroke="#e8622a"/>
-      <text x="120" y="305" text-anchor="middle" fill="#e8622a" stroke="none" font-size="14">OK</text>
-      <path class="btn" id="up"    d="M120 232 l14 22 h-28 z" stroke="#e8622a"/>
-      <path class="btn" id="down"  d="M120 368 l14 -22 h-28 z" stroke="#e8622a"/>
-      <path class="btn" id="left"  d="M52 300 l22 14 v-28 z" stroke="#e8622a"/>
-      <path class="btn" id="right" d="M188 300 l-22 14 v-28 z" stroke="#e8622a"/>
-      <circle class="btn" id="back" cx="120" cy="380" r="0"/>
+      <circle cx="68" cy="20" r="11.5" fill="#f4efe6" stroke="#222" stroke-width="0.5"/>
+      <circle class="btn" id="ok" cx="68" cy="20" r="4.6" fill="#e9e2d5" stroke="#222" stroke-width="0.4"/>
+      <path class="btn" id="up"    d="M68 10.5 l2.4 3.6 h-4.8 z" fill="#333"/>
+      <path class="btn" id="down"  d="M68 29.5 l2.4 -3.6 h-4.8 z" fill="#333"/>
+      <path class="btn" id="left"  d="M58.5 20 l3.6 2.4 v-4.8 z" fill="#333"/>
+      <path class="btn" id="right" d="M77.5 20 l-3.6 2.4 v-4.8 z" fill="#333"/>
+      <!-- back -->
+      <circle class="btn" id="back" cx="88" cy="30" r="4" fill="#f4efe6" stroke="#222" stroke-width="0.5"/>
+      <path d="M86.6 30 l2.2 -1.6 v3.2 z" fill="#333"/>
     </svg>
-    <div class="screen"><canvas id="lcd" width="400" height="240"></canvas></div>
+    <div class="screen"><canvas id="lcd" width="128" height="64"></canvas></div>
   </div>
   <div class="bar">
     <label class="act">Load picture<input id="file" type="file" accept="image/*" hidden></label>

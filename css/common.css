@@ -23,3 +23,5 @@ button.act:hover, label.act:hover { background: #333; }
 .topnav a:hover { background: #2c2c2c; color: #eee; }
 .topnav a.tx.active { background: #e8622a; color: #fff; }
 .topnav a.rx.active { background: #f4c20a; color: #111; }
+
+.hud { font: 11px ui-monospace, monospace; color: #6f9; opacity: .7; min-height: 14px; text-align: center; }

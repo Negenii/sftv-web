@@ -4,33 +4,40 @@
 <title>SFTV Receiver (Playdate)</title>
 <link rel="stylesheet" href="css/common.css">
 <style>
-  .playdate { width: 360px; height: 400px; }
-  .playdate .screen { left: 8.3%; top: 7.5%; width: 83.4%; height: 45%; background: #b7c0ad; border-radius: 4px; }
-  .playdate .screen canvas { background: #b7c0ad; }
+  /* real Playdate: 76 x 74 mm body, 400x240 LCD ~58.7 x 35.2 mm; page scale 5 px/mm */
+  .playdate { width: 380px; height: 370px; }
+  .playdate .screen { left: 11.38%; top: 10.81%; width: 77.24%; height: 47.57%; background: #cdd4c7; }
+  .playdate .screen canvas { background: #cdd4c7; filter: brightness(.94) sepia(.06); }
 </style>
 </head><body>
 <nav class="topnav"><a class="tx" href="tx.html">Flipper · Send</a><a class="rx active" href="rx.html">Playdate · Receive</a></nav>
 <div class="wrap">
   <div class="device playdate">
-    <svg viewBox="0 0 360 400" fill="none" stroke="#111" stroke-width="3">
-      <rect x="6" y="6" width="348" height="388" rx="30" fill="#f4c20a" stroke="#111"/>
-      <rect x="30" y="30" width="300" height="180" rx="5" fill="#8f9a83" stroke="#111"/>
+    <svg viewBox="0 0 76 74">
+      <rect x="0.5" y="0.5" width="75" height="73" rx="5" fill="#f5c518" stroke="#222" stroke-width="0.6"/>
+      <rect x="7.65" y="7" width="60.7" height="37.2" rx="1.2" fill="#161616"/>
       <!-- d-pad -->
-      <g stroke="#111" fill="#f4c20a">
-        <rect class="btn" id="up"    x="72" y="270" width="26" height="26" rx="4"/>
-        <rect class="btn" id="down"  x="72" y="322" width="26" height="26" rx="4"/>
-        <rect class="btn" id="left"  x="46" y="296" width="26" height="26" rx="4"/>
-        <rect class="btn" id="right" x="98" y="296" width="26" height="26" rx="4"/>
+      <g fill="#1a1a1a">
+        <rect class="btn" id="up"    x="16" y="46.5" width="6" height="7" rx="1"/>
+        <rect class="btn" id="down"  x="16" y="60.5" width="6" height="7" rx="1"/>
+        <rect class="btn" id="left"  x="9"  y="53.5" width="7" height="6" rx="1"/>
+        <rect class="btn" id="right" x="23" y="53.5" width="7" height="6" rx="1"/>
+        <rect x="16" y="53.5" width="6" height="6"/>
       </g>
-      <circle class="btn" id="b" cx="268" cy="322" r="18" fill="#f4c20a" stroke="#111"/>
-      <circle class="btn" id="a" cx="312" cy="300" r="18" fill="#f4c20a" stroke="#111"/>
-      <text x="268" y="327" text-anchor="middle" stroke="none" fill="#111" font-size="14">B</text>
-      <text x="312" y="305" text-anchor="middle" stroke="none" fill="#111" font-size="14">A</text>
-      <!-- crank -->
-      <path d="M354 120 h18 v70 h-30" stroke="#111" fill="none"/>
+      <!-- A / B -->
+      <circle class="btn" id="b" cx="54" cy="60" r="4.6" fill="#1a1a1a"/>
+      <circle class="btn" id="a" cx="65" cy="53.5" r="4.6" fill="#1a1a1a"/>
+      <text x="54" y="61.6" text-anchor="middle" fill="#f5c518" font-size="4.2" font-weight="700" font-family="system-ui">B</text>
+      <text x="65" y="55.1" text-anchor="middle" fill="#f5c518" font-size="4.2" font-weight="700" font-family="system-ui">A</text>
+      <!-- crank, folded along the right edge -->
+      <rect x="73.2" y="38" width="3.6" height="17" rx="1.8" fill="#1a1a1a"/>
+      <circle cx="75" cy="55.5" r="1.6" fill="#1a1a1a"/>
+      <!-- lock button on the top edge -->
+      <rect x="61" y="-0.2" width="7" height="1.6" rx="0.8" fill="#1a1a1a"/>
     </svg>
     <div class="screen"><canvas id="pd" width="400" height="240"></canvas></div>
   </div>
+  <div id="hud" class="hud"></div>
   <div class="bar">
     <button class="act" id="listen">Allow mic &amp; listen</button>
     <button class="act" id="clear">Clear (A)</button>

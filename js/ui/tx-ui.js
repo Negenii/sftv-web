@@ -3,6 +3,7 @@ import * as P from '../protocol/params.js';
 import { ditherRGBA, bitsToRGBA } from '../protocol/image.js';
 import { buildPhysical, frameSymbol } from '../protocol/frame.js';
 import { Modem } from '../protocol/modem.js';
+import { previewMake } from '../protocol/preview.js';
 import { TxAudio } from '../audio/tx-audio.js';
 
 const lcd = document.getElementById('lcd');
@@ -22,13 +23,38 @@ function checkerBits() {
 images.push({ name: 'checker', bits: checkerBits() });
 
 const rgba = new Uint8ClampedArray(P.WIDTH * P.HEIGHT * 4);
+// The real Flipper LCD is 128x64: the picture goes out as the same 80x48 dithered sheet the
+// receiver gets (sliding up through the top edge while sending) with a status panel on the right.
+const LCD_W = 128, LCD_H = 64, SHEET_X = 2, SHEET_Y = 8, PANEL_X = 88;
+const INK = '#2b1508', BACK = '#f39a52';
+const previewCache = new WeakMap();
+function previewOf(bits) {
+  let pv = previewCache.get(bits);
+  if (!pv) { pv = new Uint8Array(P.PREVIEW_BYTES); previewMake(bits, pv); previewCache.set(bits, pv); }
+  return pv;
+}
 function drawImage(bits, progressLines = -1) {
-  bitsToRGBA(bits, rgba);
-  g.putImageData(new ImageData(rgba, P.WIDTH, P.HEIGHT), 0, 0);
+  g.fillStyle = BACK; g.fillRect(0, 0, LCD_W, LCD_H);
+  const frac = progressLines >= 0 ? Math.min(1, progressLines / P.HEIGHT) : 0;
+  const y0 = Math.round(SHEET_Y - frac * (SHEET_Y + P.PREVIEW_H));
+  const pv = previewOf(bits);
+  g.fillStyle = INK;
+  g.fillRect(SHEET_X - 1, y0 - 1, P.PREVIEW_W + 2, 1); g.fillRect(SHEET_X - 1, y0 + P.PREVIEW_H, P.PREVIEW_W + 2, 1);
+  g.fillRect(SHEET_X - 1, y0 - 1, 1, P.PREVIEW_H + 2); g.fillRect(SHEET_X + P.PREVIEW_W, y0 - 1, 1, P.PREVIEW_H + 2);
+  for (let y = 0; y < P.PREVIEW_H; y++) {
+    const sy = y0 + y; if (sy < 0 || sy >= LCD_H) continue;
+    for (let x = 0; x < P.PREVIEW_W; x++)
+      if ((pv[y * P.PREVIEW_LINE_BYTES + (x >> 3)] >> (7 - (x & 7))) & 1) g.fillRect(SHEET_X + x, sy, 1, 1);
+  }
+  g.fillRect(PANEL_X - 3, 0, 1, LCD_H);
+  g.font = 'bold 9px system-ui'; g.textBaseline = 'alphabetic';
+  g.fillText(progressLines >= 0 ? 'TX' : 'Ready', PANEL_X, 10);
   if (progressLines >= 0) {
-    g.fillStyle = 'rgba(0,0,0,.35)';
-    g.fillRect(0, 0, P.WIDTH, Math.max(0, P.HEIGHT - progressLines));
-    g.fillStyle = '#000'; g.fillRect(0, 8, P.WIDTH * progressLines / P.HEIGHT, 3);
+    const bw = LCD_W - PANEL_X - 2;
+    g.fillRect(PANEL_X, 13, bw, 5);
+    g.fillStyle = BACK; g.fillRect(PANEL_X + 1, 14, bw - 2, 3);
+    g.fillStyle = INK; g.fillRect(PANEL_X + 1, 14, Math.round((bw - 2) * frac), 3);
+    g.font = '9px system-ui'; g.fillText(Math.round(frac * 100) + '%', PANEL_X, 30);
   }
 }
 drawImage(images[0].bits);
@@ -143,18 +169,19 @@ function noteName(text) {
   return s || 'note';
 }
 function drawNote(text) {
-  g.fillStyle = '#fb7a3c'; g.fillRect(0, 0, 400, 240);
-  g.fillStyle = '#fff'; g.fillRect(30, 20, 340, 200);
-  g.strokeStyle = '#000'; g.strokeRect(30, 20, 340, 200);
-  g.fillStyle = '#000'; g.font = '18px system-ui'; g.textBaseline = 'top';
-  const words = text.split(/\s+/); let line = '', y = 34;
+  g.fillStyle = BACK; g.fillRect(0, 0, LCD_W, LCD_H);
+  g.fillStyle = INK; g.fillRect(1, 2, PANEL_X - 6, 50);
+  g.fillStyle = BACK; g.fillRect(2, 3, PANEL_X - 8, 48);
+  g.fillStyle = INK; g.font = '8px system-ui'; g.textBaseline = 'top';
+  const maxW = PANEL_X - 12, words = text.split(/\s+/); let line = '', y = 5, lines = 0;
   for (const w of words) {
     const cand = line ? line + ' ' + w : w;
-    if (g.measureText(cand).width > 320 && line) { g.fillText(line, 42, y); y += 22; line = w; }
+    if (g.measureText(cand).width > maxW && line) { g.fillText(line, 4, y); y += 10; line = w; if (++lines >= 4) { line = ''; break; } }
     else line = cand;
-    if (y > 200) break;
   }
-  if (line && y <= 200) g.fillText(line, 42, y);
+  if (line && lines < 4) g.fillText(line, 4, y);
+  g.fillRect(PANEL_X - 3, 0, 1, LCD_H);
+  g.font = 'bold 9px system-ui'; g.textBaseline = 'alphabetic'; g.fillText('TX note', PANEL_X, 10);
 }
 const noteEl = document.getElementById('note-text');
 const presetEl = document.getElementById('note-preset');
