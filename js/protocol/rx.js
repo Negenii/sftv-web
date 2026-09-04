@@ -204,6 +204,16 @@ export class Rx {
       this.handleFrame(res[i].h, p, i, !metaNamed || !announced);
       if (metaNamed) announced = true;
     }
+    // Provisional glitch (raw mode): a failed half-line whose segment is known from the block's
+    // good frames is drawn now; a later outer-code repair overwrites it. Not stored.
+    if (type === P.FT_RAW && index >= 0) {
+      for (let i = 0; i < P.ILEAVE; i++) {
+        if (res[i].ok) continue;
+        const seg = index + i;
+        if (seg >= 0 && seg < P.NUM_SEGS && this.onPixels)
+          this.onPixels(F.segLine(seg), F.segByteOffset(seg), P.SEG_BYTES, res[i].payload.subarray(0, P.SEG_BYTES));
+      }
+    }
     if (type === P.FT_CODED) this.codedBlockUnpack(index);
     return good;
   }
