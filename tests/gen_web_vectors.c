@@ -21,8 +21,15 @@ int main(int argc, char** argv) {
     uint8_t* phys = malloc(SSTV_MAX_FRAMES * SSTV_FRAME_BYTES);
     uint8_t* la = malloc(SSTV_MAX_FRAMES);
     bool coded = false;
-    int total = sstv_build_physical(img, name, phys, la, &coded);
-    printf("total %d coded %d\n", total, coded ? 1 : 0);
+    int total;
+    if (kind == 3) { /* note pass: fixed text incl UTF-8 (Cyrillic "привет") */
+        const char* text = "Note: \xd0\xbf\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82 123";
+        total = sstv_build_note(text, name, phys, la);
+        printf("total %d coded 0\n", total);
+    } else {
+        total = sstv_build_physical(img, name, phys, la, &coded);
+        printf("total %d coded %d\n", total, coded ? 1 : 0);
+    }
     for (int f = 0; f < total; f++) {
         for (int j = 0; j < SSTV_FRAME_BYTES; j++) printf("%02x", phys[f * SSTV_FRAME_BYTES + j]);
         printf("\n");

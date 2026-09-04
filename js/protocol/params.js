@@ -27,6 +27,15 @@ export const PARITY_BYTES = 12;
 export const FRAME_BYTES = DATA_BYTES + PARITY_BYTES;               // 41
 export const FRAME_BITS = FRAME_BYTES * 8;                           // 328
 export const ILEAVE = 4;
+export const META_PAUSE = 5, META_RESUME = 6;
+export const META_NOTE_FLAG = 0x4000;   // START/END: this pass carries a text note
+export const META_UTF8_FLAG = 0x2000;   // note charset: set = UTF-8, clear = ASCII
+export const NOTE_MAX_CHARS = 1000;
+export const NOTE_CHUNK = SEG_BYTES;     // 25 text bytes per RAW frame
+export const NOTE_MAX_FRAMES = Math.floor((Math.floor((NOTE_MAX_CHARS + NOTE_CHUNK - 1) / NOTE_CHUNK) + ILEAVE - 1) / ILEAVE) * ILEAVE; // 40
+export const NOTE_LEN_OFFSET = 3;        // START: [subtype][total lo][total hi][len lo][len hi][name...]
+export const NOTE_NAME_OFFSET = 5;
+export const NOTE_NAME_MAX = PAYLOAD_BYTES - NOTE_NAME_OFFSET; // 21
 export const BLOCK_PAYLOAD = ILEAVE * PAYLOAD_BYTES;                 // 104
 export const FT_RAW = 0, FT_CODED = 1, FT_META = 2, FT_PARITY = 3;
 export const FT_SHIFT = 14, INDEX_MASK = 0x3fff;

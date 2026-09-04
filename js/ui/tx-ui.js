@@ -116,3 +116,62 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowLeft') document.getElementById('left').dispatchEvent(new Event('click'));
   else if (e.key === 'Enter' || e.key === ' ') send();
 });
+
+// ---- notes ----
+const NOTE_PRESETS = [
+  'Hello from the browser!',
+  'Meet me at the usual spot, 7pm.',
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 - text test pattern',
+  'The quick brown fox jumps over the lazy dog.',
+  'Privet! Eto zametka - proverka UTF-8.',
+  'Привет! Это заметка на русском - проверка UTF-8.',
+];
+const CYR = ['a','b','v','g','d','e','zh','z','i','y','k','l','m','n','o','p','r','s','t','u','f','h','ts','ch','sh','sch','','y','','e','yu','ya'];
+function translit(text) {
+  let out = '';
+  for (const ch of text) {
+    const cp = ch.codePointAt(0);
+    if (cp < 0x80) out += ch;
+    else if (cp >= 0x430 && cp <= 0x44f) out += CYR[cp - 0x430];
+    else if (cp >= 0x410 && cp <= 0x42f) out += CYR[cp - 0x410];
+    else if (cp === 0x451 || cp === 0x401) out += 'e';
+  }
+  return out;
+}
+function noteName(text) {
+  const s = translit((text.split('\n')[0] || '')).slice(0, P.NOTE_NAME_MAX).trim();
+  return s || 'note';
+}
+function drawNote(text) {
+  g.fillStyle = '#fb7a3c'; g.fillRect(0, 0, 400, 240);
+  g.fillStyle = '#fff'; g.fillRect(30, 20, 340, 200);
+  g.strokeStyle = '#000'; g.strokeRect(30, 20, 340, 200);
+  g.fillStyle = '#000'; g.font = '18px system-ui'; g.textBaseline = 'top';
+  const words = text.split(/\s+/); let line = '', y = 34;
+  for (const w of words) {
+    const cand = line ? line + ' ' + w : w;
+    if (g.measureText(cand).width > 320 && line) { g.fillText(line, 42, y); y += 22; line = w; }
+    else line = cand;
+    if (y > 200) break;
+  }
+  if (line && y <= 200) g.fillText(line, 42, y);
+}
+const noteEl = document.getElementById('note-text');
+const presetEl = document.getElementById('note-preset');
+if (presetEl) {
+  for (const p of NOTE_PRESETS) { const o = document.createElement('option'); o.value = p; o.textContent = p.slice(0, 32); presetEl.appendChild(o); }
+  presetEl.addEventListener('change', () => { if (presetEl.value) { noteEl.value = presetEl.value; drawNote(presetEl.value); presetEl.selectedIndex = 0; } });
+}
+async function sendNote() {
+  if (tx.playing) return;
+  const text = (noteEl.value || '').slice(0, P.NOTE_MAX_CHARS);
+  if (!text) return;
+  const sr = tx.sampleRate;
+  const samples = new Modem(sr).note(text, noteName(text));
+  sending = null;
+  led.setAttribute('fill', '#39f');
+  drawNote(text);
+  await tx.play(samples, () => { led.setAttribute('fill', '#333'); drawImage(images[index].bits); });
+}
+document.getElementById('send-note').addEventListener('click', sendNote);
+if (noteEl) noteEl.addEventListener('input', () => drawNote(noteEl.value));

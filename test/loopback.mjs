@@ -69,4 +69,20 @@ if (rec) {
   let lines = 0; for (let y = 0; y < P.HEIGHT; y++) if (cap2.seen[y] === 3) lines++;
   console.log(`recording ${rec}: phys=${d2.frames} flywheel=${d2.flywheelFrames} framesOk=${cap2.rx.framesOk} framesBad=${cap2.rx.framesBad} repaired=${cap2.rx.framesRepaired} lines=${lines}/240 tiny=${st2.tiny}/4 preview=${st2.prev}/20`);
 }
-process.exit(ok === P.HEIGHT ? 0 : 1);
+// --- note loopback (modem -> demod -> rx -> text) ---
+function noteLoopback(text) {
+  const s2 = new Modem(sr).note(text, 'lbl');
+  let got = new Uint8Array(P.NOTE_MAX_CHARS + 64), noteFlag = false;
+  const rxn = new Rx({ onNote: (chunk, nb, buf) => { const off = chunk * P.NOTE_CHUNK; for (let k = 0; k < nb; k++) got[off + k] = buf[k]; },
+                       onMeta: (nm, end, tot, coded, note) => { if (!end) noteFlag = note; } });
+  const d = new Demod(sr, (frame, margin) => rxn.phys_frame(frame, margin));
+  d.feed(s2, s2.length);
+  let z = got.indexOf(0); if (z < 0) z = got.length;
+  const out = new TextDecoder().decode(got.subarray(0, z));
+  return { ok: out === text && noteFlag, out };
+}
+const nAscii = noteLoopback('Hello from the browser! 123');
+const nCyr = noteLoopback('Привет из браузера');
+console.log(`note loopback ascii: ${nAscii.ok ? 'OK' : 'FAIL ' + JSON.stringify(nAscii.out)}`);
+console.log(`note loopback utf8:  ${nCyr.ok ? 'OK' : 'FAIL ' + JSON.stringify(nCyr.out)}`);
+process.exit((ok === P.HEIGHT && nAscii.ok && nCyr.ok) ? 0 : 1);

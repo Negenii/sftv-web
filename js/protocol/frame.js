@@ -308,3 +308,51 @@ export function buildPhysical(imageBits, name) {
   const total2 = em.blocks * P.ILEAVE;
   return { frames: out.subarray(0, total2 * P.FRAME_BYTES), linesAfter: linesAfter.subarray(0, total2), total: total2, coded: useCoded };
 }
+
+// Builds a note pass (mirror of sstv_build_note). text is a JS string (UTF-8 on the wire).
+// Returns {frames, linesAfter, total}.
+export function buildNote(text, name) {
+  const out = new Uint8Array(P.MAX_FRAMES * P.FRAME_BYTES);
+  const linesAfter = new Uint8Array(P.MAX_FRAMES);
+  const bytes = new TextEncoder().encode(text || '');
+  const len = Math.min(bytes.length, P.NOTE_MAX_CHARS);
+  let utf8 = false;
+  for (let i = 0; i < len; i++) if (bytes[i] & 0x80) { utf8 = true; break; }
+
+  const chunks = Math.floor((len + P.NOTE_CHUNK - 1) / P.NOTE_CHUNK);
+  let textFrames = Math.floor((chunks + P.ILEAVE - 1) / P.ILEAVE) * P.ILEAVE;
+  if (textFrames === 0) textFrames = P.ILEAVE;
+  const dataFrames = P.ILEAVE + textFrames;
+  const total = (dataFrames + P.OUTER_PARITY + P.ILEAVE) & 0xffff;
+
+  const em = new Emitter(out, linesAfter);
+  const logical = new Uint8Array(P.ILEAVE * P.FRAME_BYTES);
+
+  const word = (total | P.META_NOTE_FLAG | (utf8 ? P.META_UTF8_FLAG : 0)) & 0xffff;
+  const meta = new Uint8Array(P.PAYLOAD_BYTES);
+  meta[0] = P.META_START;
+  meta[1] = word & 0xff; meta[2] = (word >> 8) & 0xff;
+  meta[P.NOTE_LEN_OFFSET] = len & 0xff; meta[P.NOTE_LEN_OFFSET + 1] = (len >> 8) & 0xff;
+  if (name) { const nb = new TextEncoder().encode(name); for (let i = 0; i < Math.min(nb.length, P.NOTE_NAME_MAX); i++) meta[P.NOTE_NAME_OFFSET + i] = nb[i]; }
+  for (let i = 0; i < P.ILEAVE; i++) pack(hdr(P.FT_META, 0), meta, logical, i * P.FRAME_BYTES);
+  em.dataBlock(logical, 0, 0);
+
+  for (let block = 0; block < textFrames; block += P.ILEAVE) {
+    for (let i = 0; i < P.ILEAVE; i++) {
+      const c = block + i;
+      const payload = new Uint8Array(P.PAYLOAD_BYTES);
+      const o = c * P.NOTE_CHUNK;
+      for (let k = 0; k < P.NOTE_CHUNK && o + k < len; k++) payload[k] = bytes[o + k];
+      pack(hdr(P.FT_RAW, c), payload, logical, i * P.FRAME_BYTES);
+    }
+    em.dataBlock(logical, block, block + P.ILEAVE);
+  }
+
+  em.closeGroup();
+  meta[0] = P.META_END;
+  for (let i = 0; i < P.ILEAVE; i++) pack(hdr(P.FT_META, 1), meta, logical, i * P.FRAME_BYTES);
+  em.block(logical, textFrames, textFrames);
+
+  const t = em.blocks * P.ILEAVE;
+  return { frames: out.subarray(0, t * P.FRAME_BYTES), linesAfter: linesAfter.subarray(0, t), total: t };
+}

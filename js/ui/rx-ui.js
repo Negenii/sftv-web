@@ -20,6 +20,8 @@ const previewHave = new Uint8Array(P.PREVIEW_CHUNKS);
 const tinyBits = new Uint8Array(P.TINY_BYTES);
 const tinyHave = new Uint8Array(P.TINY_CHUNKS);
 let started = false, finished = false, name = '', hearingMs = 0, linesReached = 0;
+let isNote = false, paused = false, noteText = '';
+const noteBuf = new Uint8Array(P.NOTE_MAX_CHARS + 64);
 
 const assets = {};
 for (const n of ['dolphin', 'dolphin_open', 'console']) {
@@ -30,6 +32,7 @@ function clearImage() {
   img.fill(0); segSeen.fill(0); previewBits.fill(0); previewHave.fill(0);
   tinyBits.fill(0); tinyHave.fill(0);
   started = finished = false; name = ''; linesReached = 0;
+  isNote = false; paused = false; noteText = ''; noteBuf.fill(0);
   if (rx) rx.startPass(), rx.resetCounters();
 }
 
@@ -47,7 +50,19 @@ function makeRx() {
       if (layer === 0) { tinyBits.set(data.subarray(0, nb), chunk * P.PREVIEW_CHUNK); tinyHave[chunk] = 1; }
       else if (layer === 1) { previewBits.set(data.subarray(0, nb), chunk * P.PREVIEW_CHUNK); previewHave[chunk] = 1; }
     },
-    onMeta(nm, isEnd) { if (isEnd) { finished = true; } else { clearImageKeep(); name = nm; } },
+    onMeta(nm, isEnd, total, coded, note) {
+      isNote = !!note;
+      if (isEnd) { finished = true; }
+      else { clearImageKeep(); noteBuf.fill(0); noteText = ''; paused = false; name = nm; }
+    },
+    onNote(chunk, nb, buf) {
+      const off = chunk * P.NOTE_CHUNK;
+      for (let k = 0; k < nb; k++) noteBuf[off + k] = buf[k];
+      let z = noteBuf.indexOf(0); if (z < 0) z = noteBuf.length;
+      noteText = new TextDecoder().decode(noteBuf.subarray(0, z));
+      started = true;
+    },
+    onControl(sub) { if (sub === P.META_PAUSE) paused = true; else if (sub === P.META_RESUME) paused = false; },
   });
 }
 function clearImageKeep() { /* new pass starts: keep nothing */ img.fill(0); segSeen.fill(0); previewBits.fill(0); previewHave.fill(0); tinyBits.fill(0); tinyHave.fill(0); started = false; finished = false; linesReached = 0; }
@@ -131,10 +146,33 @@ function drawHud() {
   g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, 400, 14);
   g.fillStyle = '#0f0'; g.font = '10px monospace'; g.fillText(line, 2, 11);
 }
+function drawNote() {
+  g.fillStyle = '#b8b19a'; g.fillRect(0, 0, 400, 240);
+  g.fillStyle = '#fffdf5'; g.fillRect(24, 24, 352, 192);
+  g.strokeStyle = '#000'; g.strokeRect(24, 24, 352, 192);
+  g.beginPath(); g.moveTo(360, 24); g.lineTo(376, 40); g.lineTo(360, 40); g.closePath(); g.fillStyle = '#000'; g.fill();
+  g.fillStyle = '#000'; g.font = '18px system-ui'; g.textBaseline = 'top';
+  const words = noteText.split(/\s+/); let line = '', y = 40;
+  for (const w of words) {
+    const cand = line ? line + ' ' + w : w;
+    if (g.measureText(cand).width > 320 && line) { g.fillText(line, 40, y); y += 22; line = w; }
+    else line = cand;
+    if (y > 196) break;
+  }
+  if (line && y <= 196) g.fillText(line, 40, y);
+}
+function drawNoteBanner() {
+  if (!paused) return;
+  g.fillStyle = 'rgba(0,0,0,.85)'; const t = 'Paused - waiting for sender';
+  g.font = '14px system-ui'; const w = g.measureText(t).width + 24;
+  g.fillRect((400 - w) / 2, 8, w, 26); g.fillStyle = '#fff'; g.textBaseline = 'top'; g.fillText(t, (400 - w) / 2 + 12, 14);
+}
 function tick() {
   if (!demod) { drawScene(); }
+  else if (isNote && (started || finished)) { drawNote(); }
   else if (started || finished) { drawImage(); }
   else { drawScene(); }
+  drawNoteBanner();
   if (showPanel && demod) drawPanel();
   drawHud();
   requestAnimationFrame(tick);

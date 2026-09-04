@@ -32,6 +32,11 @@
     <button class="act" id="send">Send ▶</button>
     <button class="act" id="stop">Stop ◼</button>
   </div>
+  <div class="bar">
+    <select class="act" id="note-preset"><option value="">Note preset…</option></select>
+    <button class="act" id="send-note">Send note ▶</button>
+  </div>
+  <textarea id="note-text" rows="2" maxlength="1000" placeholder="Type a note, then Send note…" style="width:92%;margin:4px auto 0;display:block;box-sizing:border-box;font:13px system-ui"></textarea>
   <p class="hint">Arrows switch pictures, OK/Send plays it as sound. Put the speaker near the receiver's mic. First send needs a click (browser audio policy).</p>
 </div>
 <script type="module" src="js/ui/tx-ui.js"></script>

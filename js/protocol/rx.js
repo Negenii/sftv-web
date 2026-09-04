@@ -4,8 +4,10 @@ import * as P from './params.js';
 import * as F from './frame.js';
 
 export class Rx {
-  constructor({ onPixels, onMeta, onPreview } = {}) {
+  constructor({ onPixels, onMeta, onPreview, onNote, onControl } = {}) {
     this.onPixels = onPixels; this.onMeta = onMeta; this.onPreview = onPreview;
+    this.onNote = onNote; this.onControl = onControl;
+    this.note = false; this.noteUtf8 = false; this.noteLen = 0;
     this.phys = new Uint8Array(P.ILEAVE * P.FRAME_BYTES);
     this.conf = new Float32Array(P.ILEAVE * P.FRAME_BYTES);
     this.count = 0; this.framesIn = 0;
@@ -40,14 +42,17 @@ export class Rx {
     }
   }
 
-  dataFramesFromTotal(total, coded) {
+  dataFramesFromTotal(total, coded, note) {
+    if (note) { const d = total - P.OUTER_PARITY - P.ILEAVE; return d > 0 ? d : 0; }
     const intro = F.passIntro(coded);
     for (let d = 1; d <= P.MAX_DATA_FRAMES; d++) if (F.passTotal(d, intro) === total) return d;
     return 0;
   }
+  rxIntro() { return this.note ? this.dataFrames : F.passIntro(this.coded); }
 
   headerForPosition(pos) {
     if (pos < P.ILEAVE) return F.hdr(P.FT_META, 0);
+    if (this.note) return F.hdr(P.FT_RAW, pos - P.ILEAVE);
     if (pos < P.ILEAVE + P.TINY_CHUNKS) return F.hdr(P.FT_META, pos - P.ILEAVE);
     if (pos < P.ILEAVE + P.INTRO_FRAMES) return F.hdr(P.FT_META, pos - P.ILEAVE - P.TINY_CHUNKS);
     if (this.coded) {
@@ -72,7 +77,7 @@ export class Rx {
     if (pos < 0 || pos >= P.MAX_DATA_FRAMES) return;
     this.data[pos].set(payload.subarray(0, P.PAYLOAD_BYTES));
     this.have[pos] = 1;
-    const g = F.passGroupOf(pos, F.passIntro(this.coded));
+    const g = F.passGroupOf(pos, this.rxIntro());
     if (g < P.OUTER_GROUPS_MAX && !this.groupDone[g]) {
       for (let j = 0; j < P.OUTER_PARITY; j++) if (this.haveParity[g][j]) { this.tryRepair(g); break; }
     }
@@ -102,27 +107,40 @@ export class Rx {
       } else if (sub === P.META_START || sub === P.META_END) {
         const word = (payload[1] | (payload[2] << 8)) & 0xffff;
         const coded = (word & P.META_CODED_FLAG) !== 0;
-        const total = word & ~P.META_CODED_FLAG;
+        const note = (word & P.META_NOTE_FLAG) !== 0;
+        const utf8 = (word & P.META_UTF8_FLAG) !== 0;
+        const total = word & ~(P.META_CODED_FLAG | P.META_NOTE_FLAG | P.META_UTF8_FLAG);
+        this.note = note;
+        if (note) { this.noteUtf8 = utf8; this.noteLen = payload[P.NOTE_LEN_OFFSET] | (payload[P.NOTE_LEN_OFFSET + 1] << 8); }
         if (sub === P.META_START && announce) {
           if (!this.passOpen) { this.startPass(); this.passOpen = true; }
           this.coded = coded;
         }
         if (sub === P.META_END) this.passOpen = false;
-        this.dataFrames = this.dataFramesFromTotal(total, coded);
+        this.dataFrames = this.dataFramesFromTotal(total, coded, note);
         if (sub === P.META_END) for (let g = 0; g < P.OUTER_GROUPS_MAX; g++) this.tryRepair(g);
         if (announce && this.onMeta) {
-          let end = P.NAME_MAX;
-          const nb = payload.subarray(P.META_NAME_OFFSET, P.META_NAME_OFFSET + P.NAME_MAX);
-          let z = nb.indexOf(0); if (z < 0) z = P.NAME_MAX;
+          const noff = note ? P.NOTE_NAME_OFFSET : P.META_NAME_OFFSET;
+          const nmax = note ? P.NOTE_NAME_MAX : P.NAME_MAX;
+          const nb = payload.subarray(noff, noff + nmax);
+          let z = nb.indexOf(0); if (z < 0) z = nmax;
           const name = new TextDecoder().decode(nb.subarray(0, z));
-          this.onMeta(name, sub === P.META_END, total, coded);
+          this.onMeta(name, sub === P.META_END, total, coded, note);
         }
+      } else if (sub === P.META_PAUSE || sub === P.META_RESUME) {
+        if (this.onControl) this.onControl(sub, (payload[1] | (payload[2] << 8)) >>> 0);
+        return; // control frames carry no data position
       } else return;
       this.store(F.passMetaPosition(sub, index, i), payload);
     } else if (type === P.FT_RAW) {
-      this.coded = false;
-      if (this.onPixels) this.onPixels(F.segLine(index), F.segByteOffset(index), P.SEG_BYTES, payload.subarray(0, P.SEG_BYTES));
-      this.store(F.passPosition(h, i), payload);
+      if (this.note) {
+        if (this.onNote) this.onNote(index, P.NOTE_CHUNK, payload.subarray(0, P.NOTE_CHUNK));
+        this.store(P.ILEAVE + index, payload);
+      } else {
+        this.coded = false;
+        if (this.onPixels) this.onPixels(F.segLine(index), F.segByteOffset(index), P.SEG_BYTES, payload.subarray(0, P.SEG_BYTES));
+        this.store(F.passPosition(h, i), payload);
+      }
     } else if (type === P.FT_CODED) {
       this.coded = true;
       this.store(F.passPosition(h, i), payload);
@@ -131,7 +149,7 @@ export class Rx {
 
   tryRepair(g) {
     if (g >= P.OUTER_GROUPS_MAX || this.groupDone[g]) return;
-    const intro = F.passIntro(this.coded);
+    const intro = this.rxIntro();
     const n = this.dataFrames > 0 ? F.passGroupSize(this.dataFrames, intro, g) : (g === 0 ? intro : P.OUTER_GROUP);
     if (n <= 0) return;
     const base = F.passGroupBase(intro, g);

@@ -2,7 +2,7 @@
 // common/sstv_modem_ref.c (doubles instead of C float; functionally identical, decodable
 // by the JS and C demodulators and by the real Playdate).
 import * as P from './params.js';
-import { buildPhysical, frameSymbol } from './frame.js';
+import { buildPhysical, buildNote, frameSymbol } from './frame.js';
 
 export class Modem {
   constructor(sampleRate, amplitude = 8000) {
@@ -54,6 +54,19 @@ export class Modem {
       total += this.toneGain(this.tones[k], this.duty[k], this.channelGain[k], P.SYMBOL_US, out, total);
     }
     const { frames, total: nframes } = buildPhysical(imageBits, name);
+    for (let p = 0; p < nframes; p++) total += this.frame(frames, p * P.FRAME_BYTES, out, total);
+    return out.subarray(0, total);
+  }
+  // Modulates a text note (leader + note frames). Returns Int16Array.
+  note(text, name = 'note') {
+    const capUs = P.LEADER_SYMBOLS * P.SYMBOL_US + P.MAX_FRAMES * P.PHYS_US;
+    const out = new Int16Array(Math.floor(capUs * this.sampleRate / 1e6) + 64);
+    let total = 0;
+    for (let i = 0; i < P.LEADER_SYMBOLS; i++) {
+      const k = i % P.NUM_TONES;
+      total += this.toneGain(this.tones[k], this.duty[k], this.channelGain[k], P.SYMBOL_US, out, total);
+    }
+    const { frames, total: nframes } = buildNote(text, name);
     for (let p = 0; p < nframes; p++) total += this.frame(frames, p * P.FRAME_BYTES, out, total);
     return out.subarray(0, total);
   }

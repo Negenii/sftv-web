@@ -2,7 +2,7 @@
 // Run: node web/test/run.mjs
 import { readFileSync } from 'node:fs';
 import * as P from '../js/protocol/params.js';
-import { buildPhysical } from '../js/protocol/frame.js';
+import { buildPhysical, buildNote } from '../js/protocol/frame.js';
 
 function image(kind) {
   const img = new Uint8Array(P.IMAGE_BYTES);
@@ -25,6 +25,22 @@ for (const kind of [0, 1, 2]) {
     if (got !== lines[1 + f]) { ok = false; if (firstBad < 0) firstBad = f; }
   }
   console.log(`kind ${kind}: JS total=${total} coded=${coded} vs C total=${ctotal} coded=${ccoded} -> ${ok ? 'MATCH' : 'MISMATCH' + (firstBad >= 0 ? ` first bad frame ${firstBad}` : '')}`);
+  if (!ok) fail++;
+}
+
+// note pass (kind 3): must match C sstv_build_note byte for byte
+{
+  const noteText = 'Note: \u043f\u0440\u0438\u0432\u0435\u0442 123'; // "Note: привет 123"
+  const lines = readFileSync(new URL('../vectors/pass_3.txt', import.meta.url), 'utf8').trim().split('\n');
+  const [, ctotal] = lines[0].split(' ');
+  const { frames, total } = buildNote(noteText, 'pic');
+  let ok = total === +ctotal;
+  let firstBad = -1;
+  for (let f = 0; f < total && f < lines.length - 1; f++) {
+    const got = hex(frames.subarray(f * P.FRAME_BYTES, (f + 1) * P.FRAME_BYTES));
+    if (got !== lines[1 + f]) { ok = false; if (firstBad < 0) firstBad = f; }
+  }
+  console.log(`note: JS total=${total} vs C total=${ctotal} -> ${ok ? 'MATCH' : 'MISMATCH' + (firstBad >= 0 ? ` first bad frame ${firstBad}` : '')}`);
   if (!ok) fail++;
 }
 process.exit(fail ? 1 : 0);
