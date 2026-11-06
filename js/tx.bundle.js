@@ -89,6 +89,7 @@
   var CODEC_RLE = 1;
   var CODEC_XOR_RLE = 2;
   var CODEC_MAX_RECORD = 1 + LINE_BYTES;
+  var bandSymbolUs = (band) => band === BAND_HF ? HF_SYMBOL_US : SYMBOL_US;
   var bandNumTones = (band) => band === BAND_HF ? HF_NUM_TONES : NUM_TONES;
   var bandBits = (band) => band === BAND_HF ? HF_BITS_PER_SYMBOL : BITS_PER_SYMBOL;
   var bandSymbolsPerFrame = (band) => Math.ceil(FRAME_BITS / bandBits(band));
@@ -273,11 +274,6 @@
       const bi = index2 * bits + b;
       v = v << 1 | (bi < FRAME_BITS ? frameBit(frame, off, bi) : 0);
     }
-    return v;
-  }
-  function frameSymbol(frame, off, index2) {
-    let v = 0;
-    for (let b = 0; b < BITS_PER_SYMBOL; b++) v = v << 1 | frameBit(frame, off, index2 * BITS_PER_SYMBOL + b);
     return v;
   }
   function pack(h, payload, out, off = 0) {
@@ -2968,6 +2964,7 @@
   ]) };
 
   // js/ui/tx-ui.js
+  var BAND = BAND_HF;
   var lcd = document.getElementById("lcd");
   var g = lcd.getContext("2d");
   var led = document.getElementById("led");
@@ -3137,32 +3134,31 @@
   function symbolSchedule(bits) {
     const { frames, total, coded } = buildPhysical(bits, images[index].name);
     const tones = [];
-    for (let i = 0; i < LEADER_SYMBOLS; i++) tones.push({ t: leaderSymbol(i), sync: false });
+    for (let i = 0; i < bandLeaderSymbols(BAND); i++) tones.push({ t: leaderSymbol(i), sync: false });
     const lock = lockFrame();
     for (let f = 0; f < LOCK_FRAMES; f++) {
       tones.push({ t: -1, sync: true });
-      for (let s = 0; s < SYMBOLS_PER_FRAME; s++) tones.push({ t: frameSymbol(lock, 0, s), sync: false });
+      for (let s = 0; s < bandSymbolsPerFrame(BAND); s++) tones.push({ t: frameSymbolBits(lock, 0, s, bandBits(BAND)), sync: false });
     }
     for (let f = 0; f < total; f++) {
       tones.push({ t: -1, sync: true });
-      for (let s = 0; s < SYMBOLS_PER_FRAME; s++) tones.push({ t: frameSymbol(frames, f * FRAME_BYTES, s), sync: false });
+      for (let s = 0; s < bandSymbolsPerFrame(BAND); s++) tones.push({ t: frameSymbolBits(frames, f * FRAME_BYTES, s, bandBits(BAND)), sync: false });
     }
     return { tones, coded, total };
   }
   function ledColor(entry) {
     if (!entry) return "#333";
     if (entry.sync) return "#e33";
-    if (entry.t === 0) return "#333";
-    const b = [0, 102, 153, 255][entry.t] || 255;
+    const b = 80 + entry.t * 28;
     return `rgb(40,60,${b})`;
   }
   async function send() {
     if (tx.playing) return;
     const bits = images[index].bits;
     const sr = tx.sampleRate;
-    const samples = new Modem(sr).image(bits, images[index].name);
+    const samples = new Modem(sr).setBand(BAND).image(bits, images[index].name);
     const { tones: sched, coded, total } = symbolSchedule(bits);
-    const symDur = SYMBOL_US / 1e6, syncDur = SYNC_US / 1e6;
+    const symDur = bandSymbolUs(BAND) / 1e6, syncDur = SYNC_US / 1e6;
     sending = { bits, sched, symDur, syncDur, coded, total };
     await tx.play(samples, () => {
       const doneS = Math.round(tx.duration);
@@ -3315,7 +3311,7 @@
     const text2 = (noteEl.value || "").slice(0, NOTE_MAX_CHARS);
     if (!text2) return;
     const sr = tx.sampleRate;
-    const samples = new Modem(sr).note(text2, noteName(text2));
+    const samples = new Modem(sr).setBand(BAND).note(text2, noteName(text2));
     sending = null;
     noteSending = text2;
     led.setAttribute("fill", "#39f");

@@ -1,7 +1,9 @@
 // Transmitter UI (Flipper). Loads pictures, dithers to 400x240 1-bit, plays them as sound.
 import * as P from '../protocol/params.js';
 import { ditherRGBA, bitsToRGBA } from '../protocol/image.js';
-import { buildPhysical, frameSymbol, lockFrame } from '../protocol/frame.js';
+import { buildPhysical, frameSymbolBits, lockFrame } from '../protocol/frame.js';
+// Near-ultrasound only (the audible band is archived: git tag audible-mode-archive).
+const BAND = P.BAND_HF;
 import { Modem } from '../protocol/modem.js';
 import { previewMake } from '../protocol/preview.js';
 import { TxAudio } from '../audio/tx-audio.js';
@@ -158,15 +160,15 @@ async function loadFile(file) {
 function symbolSchedule(bits) {
   const { frames, total, coded } = buildPhysical(bits, images[index].name);
   const tones = [];
-  for (let i = 0; i < P.LEADER_SYMBOLS; i++) tones.push({ t: P.leaderSymbol(i), sync: false }); // tone ladder
+  for (let i = 0; i < P.bandLeaderSymbols(BAND); i++) tones.push({ t: P.leaderSymbol(i), sync: false }); // tone ladder
   const lock = lockFrame();
   for (let f = 0; f < P.LOCK_FRAMES; f++) { // lock frames
     tones.push({ t: -1, sync: true });
-    for (let s = 0; s < P.SYMBOLS_PER_FRAME; s++) tones.push({ t: frameSymbol(lock, 0, s), sync: false });
+    for (let s = 0; s < P.bandSymbolsPerFrame(BAND); s++) tones.push({ t: frameSymbolBits(lock, 0, s, P.bandBits(BAND)), sync: false });
   }
   for (let f = 0; f < total; f++) {
     tones.push({ t: -1, sync: true });
-    for (let s = 0; s < P.SYMBOLS_PER_FRAME; s++) tones.push({ t: frameSymbol(frames, f * P.FRAME_BYTES, s), sync: false });
+    for (let s = 0; s < P.bandSymbolsPerFrame(BAND); s++) tones.push({ t: frameSymbolBits(frames, f * P.FRAME_BYTES, s, P.bandBits(BAND)), sync: false });
   }
   return { tones, coded, total };
 }
@@ -174,8 +176,7 @@ function symbolSchedule(bits) {
 function ledColor(entry) {
   if (!entry) return '#333';
   if (entry.sync) return '#e33';                     // red on sync
-  if (entry.t === 0) return '#333';                  // silence
-  const b = [0, 0x66, 0x99, 0xff][entry.t] || 0xff;  // brighter blue for higher tones
+  const b = 0x50 + entry.t * 0x1c;                    // 8 HF tones: brighter blue for higher tones
   return `rgb(40,60,${b})`;
 }
 
@@ -183,9 +184,9 @@ async function send() {
   if (tx.playing) return;
   const bits = images[index].bits;
   const sr = tx.sampleRate;
-  const samples = new Modem(sr).image(bits, images[index].name);
+  const samples = new Modem(sr).setBand(BAND).image(bits, images[index].name);
   const { tones: sched, coded, total } = symbolSchedule(bits);
-  const symDur = P.SYMBOL_US / 1e6, syncDur = P.SYNC_US / 1e6;
+  const symDur = P.bandSymbolUs(BAND) / 1e6, syncDur = P.SYNC_US / 1e6;
   sending = { bits, sched, symDur, syncDur, coded, total };
   await tx.play(samples, () => {
     const doneS = Math.round(tx.duration);
@@ -300,7 +301,7 @@ async function sendNote() {
   const text = (noteEl.value || '').slice(0, P.NOTE_MAX_CHARS);
   if (!text) return;
   const sr = tx.sampleRate;
-  const samples = new Modem(sr).note(text, noteName(text));
+  const samples = new Modem(sr).setBand(BAND).note(text, noteName(text));
   sending = null;
   noteSending = text;
   led.setAttribute('fill', '#39f');

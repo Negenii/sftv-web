@@ -1,6 +1,9 @@
 # SFTV Web
 
 Browser transmitter and receiver for SFTV, wire-compatible with the Flipper Zero and Playdate.
+Near-ultrasound band only (17-21 kHz); the audible 3-4 kHz band is archived at git tag
+`audible-mode-archive`. Mac speakers may not reproduce 17-21 kHz well: the web transmitter is
+mainly a protocol simulator, the receiver is the useful part.
 Static site, plain JS ES modules, no build. See `docs/2026-09-03-sftv-web-design.md`.
 
 - `js/protocol/` — JS port of the C `common/` protocol (params, rs, crc8, codec, frame, preview, modem, demod, rx). Validated byte-for-byte against C.

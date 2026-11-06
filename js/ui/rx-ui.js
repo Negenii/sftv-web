@@ -207,42 +207,10 @@ function makeDemod(sr, band) {
   return d;
 }
 
-// Band sniffer (mirror of the Playdate app's): one demodulator on the active band, a block
-// Goertzel on both bands; switch to HF when 18-21 kHz is loud while 3-5.5 kHz is quiet (audible
-// passes leak harmonics up there, always with loud fundamentals), back on sustained audible
-// tones, never in the middle of a pass.
-const SNIFF_HZ = [3000, 3500, 4000, 5500, 18000, 19000, 20000, 21000];
-const SNIFF_BLOCK = 256, SNIFF_HOLD = 20, SNIFF_HF_ON = 8, SNIFF_AUD_QUIET = 20, SNIFF_AUD_ON = 60;
-let activeBand = P.BAND_AUDIBLE, sniffRate = 48000;
+// Near-ultrasound only (the audible band is archived: git tag audible-mode-archive).
+const activeBand = P.BAND_HF;
+let ctxRate = 48000; // the context's sample rate, shown in the status line
 function physUsNow() { return P.bandPhysUs(activeBand); } // frame length of the band in use
-let sniffCoef = [], sniffS1 = new Float64Array(8), sniffS2 = new Float64Array(8), sniffFill = 0, sniffHfRun = 0, sniffAudRun = 0;
-function sniffInit(sr) { sniffRate = sr; sniffCoef = SNIFF_HZ.map((f) => 2 * Math.cos(2 * Math.PI * f / sr)); }
-function setBand(band) {
-  if (band === activeBand) return;
-  activeBand = band;
-  demod = makeDemod(sniffRate, band);
-  rx.count = 0;
-}
-function sniff(x) {
-  for (let i = 0; i < x.length; i++) {
-    const v = x[i];
-    for (let k = 0; k < 8; k++) { const s0 = v + sniffCoef[k] * sniffS1[k] - sniffS2[k]; sniffS2[k] = sniffS1[k]; sniffS1[k] = s0; }
-    if (++sniffFill < SNIFF_BLOCK) continue;
-    let aud = 0, hf = 0;
-    for (let k = 0; k < 8; k++) {
-      const pw = sniffS1[k] * sniffS1[k] + sniffS2[k] * sniffS2[k] - sniffCoef[k] * sniffS1[k] * sniffS2[k];
-      const a = Math.sqrt(Math.max(0, pw)) * 2 / SNIFF_BLOCK;
-      if (k < 4) aud = Math.max(aud, a); else hf = Math.max(hf, a);
-      sniffS1[k] = sniffS2[k] = 0;
-    }
-    sniffFill = 0;
-    sniffHfRun = hf > SNIFF_HF_ON && aud < SNIFF_AUD_QUIET ? sniffHfRun + 1 : 0;
-    sniffAudRun = aud > SNIFF_AUD_ON ? sniffAudRun + 1 : 0;
-    if (started && !finished && nowMs() - lastDataMs < 3000) continue;
-    if (activeBand === P.BAND_AUDIBLE && sniffHfRun >= SNIFF_HOLD) setBand(P.BAND_HF);
-    else if (activeBand === P.BAND_HF && sniffAudRun >= SNIFF_HOLD) setBand(P.BAND_AUDIBLE);
-  }
-}
 
 async function listen() {
   if (demod) return;
@@ -251,15 +219,14 @@ async function listen() {
     recPush(f32);
     const s = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) { const v = f32[i] * 32768; s[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v | 0; }
-    sniff(s);
     demod.feed(s, s.length);
   });
   recRate = sr;
   const tr = rxAudio.stream && rxAudio.stream.getAudioTracks()[0];
   micLabel = tr ? tr.label : '';
   makeRx();
-  sniffInit(sr);
-  demod = makeDemod(sr, P.BAND_AUDIBLE);
+  ctxRate = sr;
+  demod = makeDemod(sr, activeBand);
   micState = 1;
   document.getElementById('listen').textContent = 'Listening…';
 }
@@ -416,7 +383,6 @@ function drawPanel() {
   let px = x;
   px += drawPill(state, px, y, true) + 5;
   px += drawPill(isNote() ? 'TXT' : rx && rx.coded ? 'ZIP' : 'RAW', px, y, false) + 5;
-  if (activeBand === P.BAND_HF) drawPill('HF', px, y, false);
   y += fontUi.height + 12;
   const barW = PANEL_W - 16;
   gfx.drawRoundRect(x, y, barW, 8, 4, 1, BLACK);
@@ -541,14 +507,12 @@ function drawReceive() {
 }
 
 // Full reset without touching the microphone (no new permission prompt): picture, counters,
-// receiver, demodulator, band and sniffer back to their start state.
+// receiver and demodulator back to their start state.
 function resetAll() {
   clearImage();
   if (!demod) return; // not listening yet: nothing else to reset
   makeRx();
-  activeBand = P.BAND_AUDIBLE;
-  sniffS1.fill(0); sniffS2.fill(0); sniffFill = 0; sniffHfRun = 0; sniffAudRun = 0;
-  demod = makeDemod(sniffRate, P.BAND_AUDIBLE);
+  demod = makeDemod(ctxRate, activeBand);
   name = ''; untitled = 0; finishedMs = -1e9; ledFrameMs = ledBlockMs = lastBlockMs = hearingMs = -1e9;
 }
 
@@ -577,7 +541,7 @@ function tick() {
     // fixed-width fields: the line must not change width (it used to reflow and shift the page)
     const num = (v, w) => String(v).padStart(w, '\u2007'); // figure space
     const tone = st.tone < 0 ? '--' : st.tone === 8 ? 'S' : String(st.tone);
-    const l1 = `${micLabel ? 'mic: ' + micLabel : 'mic: -'} · ${(sniffRate / 1000).toFixed(1)} kHz · band: ${activeBand === P.BAND_HF ? 'ultra  ' : 'audible'}`;
+    const l1 = `${micLabel ? 'mic: ' + micLabel : 'mic: -'} · ${(ctxRate / 1000).toFixed(1)} kHz`;
     const l2 = `frames ${num(demod ? demod.frames : 0, 5)} · ok ${num(rx ? rx.framesOk : 0, 5)} · bad ${num(rx ? rx.framesBad : 0, 4)} · tiny ${tc}/4 · preview ${num(pc, 2)}/20 · tone ${num(tone, 2)} · level ${st.level.toFixed(2)}`;
     if (hudL1.textContent !== l1) hudL1.textContent = l1;
     if (hudL2.textContent !== l2) hudL2.textContent = l2;
