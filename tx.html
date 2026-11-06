@@ -4,44 +4,35 @@
 <title>SFTV Transmitter (Flipper)</title>
 <link rel="stylesheet" href="css/common.css">
 <style>
-  /* Flipper Zero front face traced from the official drawing (800x418 grid); face ~100 mm wide -> ~5 px/mm */
-  .flipper { width: 550px; height: 287px; }
-  .flipper .screen { left: 27%; top: 23.9%; width: 31.75%; height: 30.4%; background: #f39a52; border-radius: 3px; }
-  .flipper .screen canvas { background: #f39a52; }
+  /* qFlipper device art (assets/flipper.svg, viewBox 360x156) with the LCD, LED and button
+   * hotspots laid over it in the same coordinates */
+  /* 720 px wide = 2 CSS px per viewBox unit, so each LCD pixel is exactly 2x2 CSS px: an
+   * integer scale keeps the 1-bit font crisp (non-integer scaling makes pixels uneven) */
+  .flipper { width: min(720px, 94vw); aspect-ratio: 360 / 156; }
+  .flipper > img, .flipper > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .flipper > svg { pointer-events: none; }
+  .flipper > svg .btn { pointer-events: all; fill: transparent; }
+  .flipper > svg .btn:active { fill: rgba(254,138,44,.25); opacity: 1; }
+  /* LCD 93,26.5 128x64 in viewBox units (centred in the orange screen 89,22 136x73) */
+  .flipper .screen { left: calc(93% / 3.6); top: calc(26.5% / 1.56); width: calc(128% / 3.6); height: calc(64% / 1.56); background: #fe8a2c; }
+  .flipper .screen canvas { background: #fe8a2c; }
   #led { transition: fill .05s; }
 </style>
 </head><body>
 <nav class="topnav"><a class="tx active" href="tx.html">Flipper · Send</a><a class="rx" href="rx.html">Playdate · Receive</a></nav>
 <div class="wrap">
   <div class="device flipper">
-    <svg viewBox="0 0 800 418" stroke-linejoin="round">
-      <!-- body: pointed nose on the left, rounded end on the right -->
-      <path d="M35 205 L175 62 L705 62 Q760 62 760 117 L760 297 Q760 352 705 352 L130 345 Z" fill="#e85d1c" stroke="#1a1a1a" stroke-width="5"/>
-      <!-- thickness hint along the bottom -->
-      <path d="M130 345 L705 352 Q760 352 760 297 L760 312 Q760 366 705 366 L130 359 Z" fill="#c84c14" stroke="#1a1a1a" stroke-width="4"/>
-      <!-- raised front panel -->
-      <path d="M56 205 L186 79 L698 79 Q744 79 744 125 L744 291 Q744 335 698 335 L142 329 Z" fill="#f26b21" stroke="#1a1a1a" stroke-width="3"/>
-      <!-- LCD window -->
-      <rect x="207" y="91" width="272" height="145" rx="10" fill="#141414"/>
-      <!-- RGB notification LED, under the screen's right edge -->
-      <circle id="led" cx="507" cy="245" r="7" fill="#333" stroke="#1a1a1a" stroke-width="2"/>
-      <!-- 5-way pad -->
-      <circle cx="580" cy="165" r="76" fill="#f4efe6" stroke="#1a1a1a" stroke-width="4"/>
-      <circle class="btn" id="ok" cx="580" cy="165" r="25" fill="#e9e2d5" stroke="#1a1a1a" stroke-width="3"/>
-      <path class="btn" id="up"    d="M580 106 l14 20 h-28 z" fill="#1a1a1a"/>
-      <path class="btn" id="down"  d="M580 224 l14 -20 h-28 z" fill="#1a1a1a"/>
-      <path class="btn" id="left"  d="M521 165 l20 14 v-28 z" fill="#1a1a1a"/>
-      <path class="btn" id="right" d="M639 165 l-20 14 v-28 z" fill="#1a1a1a"/>
-      <!-- back -->
-      <circle class="btn" id="back" cx="690" cy="213" r="25" fill="#f4efe6" stroke="#1a1a1a" stroke-width="4"/>
-      <path d="M700 205 a9 9 0 1 1 -3 15" fill="none" stroke="#1a1a1a" stroke-width="3"/>
-      <path d="M681 212 l7 -8 v16 z" fill="#1a1a1a"/>
-      <!-- wordmark -->
-      <text x="440" y="318" text-anchor="middle" fill="#ffb26b" font-family="system-ui, sans-serif" font-size="40" font-weight="800" font-style="italic" letter-spacing="3">FLIPPER</text>
-      <!-- bottom slot -->
-      <rect x="560" y="345" width="100" height="7" rx="3.5" fill="#1a1a1a"/>
-    </svg>
+    <img src="assets/flipper.svg" alt="" draggable="false">
     <div class="screen"><canvas id="lcd" width="128" height="64"></canvas></div>
+    <svg viewBox="0 0 360 156">
+      <circle id="led" cx="238.5" cy="94.5" r="2.4" fill="#333"/>
+      <circle class="btn" id="ok" cx="274.5" cy="58.5" r="11.5"/>
+      <rect class="btn" id="up" x="264" y="25" width="21" height="19" rx="4"/>
+      <rect class="btn" id="down" x="264" y="73" width="21" height="19" rx="4"/>
+      <rect class="btn" id="left" x="240" y="48" width="19" height="21" rx="4"/>
+      <rect class="btn" id="right" x="290" y="48" width="19" height="21" rx="4"/>
+      <circle class="btn" id="back" cx="326.5" cy="82.5" r="11.5"/>
+    </svg>
   </div>
   <div class="bar">
     <label class="act">Load picture<input id="file" type="file" accept="image/*" hidden></label>
@@ -55,5 +46,5 @@
   <textarea id="note-text" rows="2" maxlength="1000" placeholder="Type a note, then Send note…" style="width:92%;margin:4px auto 0;display:block;box-sizing:border-box;font:13px system-ui"></textarea>
   <p class="hint">Arrows switch pictures, OK/Send plays it as sound. Put the speaker near the receiver's mic. First send needs a click (browser audio policy).</p>
 </div>
-<script type="module" src="js/ui/tx-ui.js"></script>
+<script src="js/tx.bundle.js"></script>
 </body></html>

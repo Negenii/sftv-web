@@ -238,6 +238,7 @@ export class Rx {
 
   phys_frame(frame, soft) {
     this.framesIn++;
+    if (F.isLockFrame(frame)) { this.count = 0; return; } // preamble lock frame: keep it out of the window
     if (this.count === P.ILEAVE) {
       this.phys.copyWithin(0, P.FRAME_BYTES, P.ILEAVE * P.FRAME_BYTES);
       this.conf.copyWithin(0, P.FRAME_BYTES, P.ILEAVE * P.FRAME_BYTES);

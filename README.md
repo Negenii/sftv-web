@@ -11,13 +11,26 @@ Regenerate vectors: `clang -std=c11 -I common -o /tmp/genvec tests/gen_web_vecto
 
 ## Run locally
 
-`getUserMedia` and ES modules need a secure context; `localhost` counts. From the repo root:
+Just open `tx.html` from disk: the pages load `js/tx.bundle.js` / `js/rx.bundle.js`, plain
+scripts built from the ES modules by `./build.sh` (esbuild via npx). Rerun it after editing `js/`.
+
+The receiver needs the mic, and Safari only allows `getUserMedia` on `localhost`/https. If
+`rx.html` from disk can't get the mic, serve the folder. From the repo root:
 
     (cd web && python3 -m http.server 8000)
 
 then open http://localhost:8000/ and pick Transmitter or Receiver. For the full loop on one
 machine, open the transmitter and receiver in two tabs, unmute the speakers and allow the mic.
 Deploy: serve `web/` as static files (GitHub Pages: set Pages source to the repo, `/web`).
+
+## Looks
+
+- The receiver draws the Playdate app's Receive screen with the app's own fonts and images:
+  `node tools/make_web_pd_assets.mjs` converts `playdate/Source/{fonts,images}` into
+  `js/ui/pd-assets.js`; `js/ui/pd-gfx.js` is a 1-bit framebuffer with the Playdate drawing calls.
+  Rerun the converter if those assets change, then `./build.sh`.
+- Device art: `assets/flipper.svg` (qFlipper, GPL-3.0) and `assets/playdate.png` (Panic's product
+  render). Both are third-party images: fine for local use, check the rights before publishing.
 
 ## Tests
 

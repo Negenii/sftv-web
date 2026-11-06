@@ -2,7 +2,7 @@
 // common/sstv_modem_ref.c (doubles instead of C float; functionally identical, decodable
 // by the JS and C demodulators and by the real Playdate).
 import * as P from './params.js';
-import { buildPhysical, buildNote, frameSymbol } from './frame.js';
+import { buildPhysical, buildNote, frameSymbolBits, lockFrame } from './frame.js';
 
 export class Modem {
   constructor(sampleRate, amplitude = 8000) {
@@ -16,6 +16,8 @@ export class Modem {
     });
     this.fsync = P.FSYNC_HZ;
     this.syncDuty = P.SYNC_DUTY_PCT / 100;
+    this.symbolUs = P.SYMBOL_US; // see setBand
+    this.band = P.BAND_AUDIBLE; this.bits = P.BITS_PER_SYMBOL; this.spf = P.SYMBOLS_PER_FRAME;
     this.phase = 0; this.timeUs = 0; this.samplesOut = 0;
   }
   // Appends a tone; returns samples written into out at off.
@@ -38,36 +40,50 @@ export class Modem {
   }
   frame(frames, frameOff, out, off) {
     let total = this.toneGain(this.fsync, this.syncDuty, 1, P.SYNC_US, out, off);
-    for (let i = 0; i < P.SYMBOLS_PER_FRAME; i++) {
-      const v = frameSymbol(frames, frameOff, i);
-      total += this.toneGain(this.tones[v], this.duty[v], this.channelGain[v], P.SYMBOL_US, out, off + total);
+    for (let i = 0; i < this.spf; i++) {
+      const v = frameSymbolBits(frames, frameOff, i, this.bits);
+      total += this.toneGain(this.tones[v], this.duty[v], this.channelGain[v], this.symbolUs, out, off + total);
     }
     return total;
   }
-  // Modulates a whole image (leader + all physical frames). Returns Int16Array.
-  image(imageBits, name = 'image') {
-    const capUs = P.LEADER_SYMBOLS * P.SYMBOL_US + P.MAX_FRAMES * P.PHYS_US;
-    const out = new Int16Array(Math.floor(capUs * this.sampleRate / 1e6) + 64);
-    let total = 0;
-    for (let i = 0; i < P.LEADER_SYMBOLS; i++) {
-      const k = i % P.NUM_TONES;
-      total += this.toneGain(this.tones[k], this.duty[k], this.channelGain[k], P.SYMBOL_US, out, total);
+  // Switches to the HF band (8-FSK, 3 ms) or back (mirror of sstv_mod_set_band).
+  setBand(band) {
+    if (band !== P.BAND_HF) {
+      const fresh = new Modem(this.sampleRate, this.amplitude);
+      Object.assign(this, { tones: fresh.tones, duty: fresh.duty, channelGain: fresh.channelGain, fsync: fresh.fsync, symbolUs: fresh.symbolUs, band: fresh.band, bits: fresh.bits, spf: fresh.spf });
+      return this;
     }
-    const { frames, total: nframes } = buildPhysical(imageBits, name);
+    this.tones = P.HF_TONES_HZ.slice(); this.duty = this.tones.map(() => 0.5); this.channelGain = this.tones.map(() => 1);
+    this.fsync = P.HF_FSYNC_HZ; this.symbolUs = P.HF_SYMBOL_US;
+    this.band = P.BAND_HF; this.bits = P.HF_BITS_PER_SYMBOL; this.spf = P.bandSymbolsPerFrame(P.BAND_HF);
+    return this;
+  }
+  // Start preamble: tone ladder, then lock frames (mirror of sstv_mod_preamble).
+  preamble(out, off) {
+    let total = 0;
+    for (let i = 0; i < P.bandLeaderSymbols(this.band); i++) {
+      const k = P.leaderSymbol(i);
+      total += this.toneGain(this.tones[k], this.duty[k], this.channelGain[k], this.symbolUs, out, off + total);
+    }
+    const lock = lockFrame();
+    for (let f = 0; f < P.LOCK_FRAMES; f++) total += this.frame(lock, 0, out, off + total);
+    return total;
+  }
+  pass(frames, nframes) {
+    const capUs = P.PREAMBLE_US + P.MAX_FRAMES * P.PHYS_US;
+    const out = new Int16Array(Math.floor(capUs * this.sampleRate / 1e6) + 64);
+    let total = this.preamble(out, 0);
     for (let p = 0; p < nframes; p++) total += this.frame(frames, p * P.FRAME_BYTES, out, total);
     return out.subarray(0, total);
   }
-  // Modulates a text note (leader + note frames). Returns Int16Array.
+  // Modulates a whole image (preamble + all physical frames). Returns Int16Array.
+  image(imageBits, name = 'image') {
+    const { frames, total } = buildPhysical(imageBits, name);
+    return this.pass(frames, total);
+  }
+  // Modulates a text note (preamble + note frames). Returns Int16Array.
   note(text, name = 'note') {
-    const capUs = P.LEADER_SYMBOLS * P.SYMBOL_US + P.MAX_FRAMES * P.PHYS_US;
-    const out = new Int16Array(Math.floor(capUs * this.sampleRate / 1e6) + 64);
-    let total = 0;
-    for (let i = 0; i < P.LEADER_SYMBOLS; i++) {
-      const k = i % P.NUM_TONES;
-      total += this.toneGain(this.tones[k], this.duty[k], this.channelGain[k], P.SYMBOL_US, out, total);
-    }
-    const { frames, total: nframes } = buildNote(text, name);
-    for (let p = 0; p < nframes; p++) total += this.frame(frames, p * P.FRAME_BYTES, out, total);
-    return out.subarray(0, total);
+    const { frames, total } = buildNote(text, name);
+    return this.pass(frames, total);
   }
 }

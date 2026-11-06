@@ -1,10 +1,13 @@
 // Transmitter UI (Flipper). Loads pictures, dithers to 400x240 1-bit, plays them as sound.
 import * as P from '../protocol/params.js';
 import { ditherRGBA, bitsToRGBA } from '../protocol/image.js';
-import { buildPhysical, frameSymbol } from '../protocol/frame.js';
+import { buildPhysical, frameSymbol, lockFrame } from '../protocol/frame.js';
 import { Modem } from '../protocol/modem.js';
 import { previewMake } from '../protocol/preview.js';
 import { TxAudio } from '../audio/tx-audio.js';
+import { U8g2Font } from './u8g2font.js';
+import { HAXRCORP } from './font-haxrcorp.js';
+import { DOLPHIN_DONE } from './icon-dolphin-done.js';
 
 const lcd = document.getElementById('lcd');
 const g = lcd.getContext('2d');
@@ -12,7 +15,8 @@ const led = document.getElementById('led');
 const tx = new TxAudio();
 let images = [];        // { name, bits }
 let index = 0;
-let sending = null;      // { total, coded, dataFrames, intro, symbolTones } while playing
+let sending = null;      // { bits, sched, coded, total, ... } while an image plays
+let noteSending = null;  // note text while a note pass plays
 
 function checkerBits() {
   const b = new Uint8Array(P.IMAGE_BYTES);
@@ -25,37 +29,112 @@ images.push({ name: 'checker', bits: checkerBits() });
 const rgba = new Uint8ClampedArray(P.WIDTH * P.HEIGHT * 4);
 // The real Flipper LCD is 128x64: the picture goes out as the same 80x48 dithered sheet the
 // receiver gets (sliding up through the top edge while sending) with a status panel on the right.
-const LCD_W = 128, LCD_H = 64, SHEET_X = 2, SHEET_Y = 8, PANEL_X = 88;
-const INK = '#2b1508', BACK = '#f39a52';
+const LCD_W = 128, LCD_H = 64, SHEET_X = 3, SHEET_Y = 8, SHEET_BOTTOM = 63, PANEL_X = 88;
+const INK = '#1a0c02', BACK = '#fe8a2c';
 const previewCache = new WeakMap();
 function previewOf(bits) {
   let pv = previewCache.get(bits);
   if (!pv) { pv = new Uint8Array(P.PREVIEW_BYTES); previewMake(bits, pv); previewCache.set(bits, pv); }
   return pv;
 }
-function drawImage(bits, progressLines = -1) {
-  g.fillStyle = BACK; g.fillRect(0, 0, LCD_W, LCD_H);
-  const frac = progressLines >= 0 ? Math.min(1, progressLines / P.HEIGHT) : 0;
-  const y0 = Math.round(SHEET_Y - frac * (SHEET_Y + P.PREVIEW_H));
-  const pv = previewOf(bits);
+// Text uses the Flipper's own bitmap font (FontSecondary look + Cyrillic), decoded from u8g2 data.
+const FONT = new U8g2Font(HAXRCORP);
+const text = (str, x, y) => FONT.draw(g, x, y, str); // y = baseline, like canvas_draw_str
+const box = (x, y, w, h) => g.fillRect(x, y, w, h);
+// u8g2 rounded frame, radius 3 (what elements_progress_bar draws)
+function rframe3(x, y, w, h) {
+  box(x + 3, y, w - 6, 1); box(x + 3, y + h - 1, w - 6, 1);
+  box(x, y + 3, 1, h - 6); box(x + w - 1, y + 3, 1, h - 6);
+  for (const [cx, cy, sx, sy] of [[x + 3, y + 3, -1, -1], [x + w - 4, y + 3, 1, -1], [x + 3, y + h - 4, -1, 1], [x + w - 4, y + h - 4, 1, 1]])
+    for (const [dx, dy] of [[1, 3], [2, 2], [3, 1]]) box(cx + sx * dx, cy + sy * dy, 1, 1);
+}
+function progressBar(x, y, w, frac) {
+  const h = 9;
+  g.fillStyle = BACK; box(x + 1, y + 1, w - 2, h - 2);
+  g.fillStyle = INK; rframe3(x, y, w, h);
+  box(x + 1, y + 1, Math.round(Math.min(1, Math.max(0, frac)) * (w - 2)), h - 2);
+}
+// Bresenham line, like canvas_draw_line
+function line(x0, y0, x1, y1) {
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy;
+  for (;;) {
+    box(x0, y0, 1, 1);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+function icon(ic, x, y) {
+  const lb = ic.w >> 3;
+  for (let r = 0; r < ic.h; r++) for (let c = 0; c < ic.w; c++)
+    if ((ic.bits[r * lb + (c >> 3)] >> (7 - (c & 7))) & 1) box(x + c, y + r, 1, 1);
+}
+// What lies under the sheet: the resting dolphin low on the screen and a "Sent!" bubble above
+// (draw_under_layer() in flipper/sstv_app.c).
+function drawUnderLayer() {
   g.fillStyle = INK;
-  g.fillRect(SHEET_X - 1, y0 - 1, P.PREVIEW_W + 2, 1); g.fillRect(SHEET_X - 1, y0 + P.PREVIEW_H, P.PREVIEW_W + 2, 1);
-  g.fillRect(SHEET_X - 1, y0 - 1, 1, P.PREVIEW_H + 2); g.fillRect(SHEET_X + P.PREVIEW_W, y0 - 1, 1, P.PREVIEW_H + 2);
-  for (let y = 0; y < P.PREVIEW_H; y++) {
-    const sy = y0 + y; if (sy < 0 || sy >= LCD_H) continue;
-    for (let x = 0; x < P.PREVIEW_W; x++)
-      if ((pv[y * P.PREVIEW_LINE_BYTES + (x >> 3)] >> (7 - (x & 7))) & 1) g.fillRect(SHEET_X + x, sy, 1, 1);
+  icon(DOLPHIN_DONE, SHEET_X, LCD_H - DOLPHIN_DONE.h);
+  const t = 'Sent!', tw = FONT.width(t);
+  const bx = SHEET_X + 6, by = 1, bw = tw + 8, bh = 12;
+  rframe3(bx, by, bw, bh);
+  text(t, bx + 4, by + 9);
+  // tail towards the dolphin, who lies to the right
+  const tx = bx + bw - 6;
+  g.fillStyle = BACK; line(tx - 4, by + bh - 1, tx, by + bh - 1);
+  g.fillStyle = INK; line(tx - 5, by + bh - 1, tx + 2, by + bh + 3); line(tx + 1, by + bh - 1, tx + 2, by + bh + 3);
+}
+const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+// Right-hand panel, laid out like draw_panel() in flipper/sstv_app.c.
+// st: null -> "Ready"; else { label, frac, leftS, frames }
+function drawPanel(st) {
+  g.fillStyle = INK;
+  box(PANEL_X - 3, 0, 1, LCD_H);
+  if (!st) { text('Ready', PANEL_X, 9); return; }
+  text(st.label, PANEL_X, 9);
+  progressBar(PANEL_X, 12, LCD_W - PANEL_X, st.frac);
+  g.fillStyle = INK;
+  if (st.doneS != null) { text(mmss(st.doneS), PANEL_X, 32); return; } // Done: total airtime
+  // tenths only on long passes, like the device
+  const pct = st.frames > 200 ? (Math.floor(st.frac * 1000) / 10).toFixed(1) : String(Math.floor(st.frac * 100));
+  text(pct + '%', PANEL_X, 32);
+  text('~' + mmss(Math.max(0, st.leftS)), PANEL_X, 42);
+}
+// The real LCD is 1-bit: snap every pixel to ink or background, so canvas text antialiasing
+// doesn't turn into grey mush when the 128x64 canvas is scaled up.
+const INK_RGB = [0x1a, 0x0c, 0x02], BACK_RGB = [0xfe, 0x8a, 0x2c];
+function snap1bit() {
+  const id = g.getImageData(0, 0, LCD_W, LCD_H), d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const c = (d[i] + d[i + 1] + d[i + 2]) < 3 * 0x80 ? INK_RGB : BACK_RGB;
+    d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
   }
-  g.fillRect(PANEL_X - 3, 0, 1, LCD_H);
-  g.font = 'bold 9px system-ui'; g.textBaseline = 'alphabetic';
-  g.fillText(progressLines >= 0 ? 'TX' : 'Ready', PANEL_X, 10);
-  if (progressLines >= 0) {
-    const bw = LCD_W - PANEL_X - 2;
-    g.fillRect(PANEL_X, 13, bw, 5);
-    g.fillStyle = BACK; g.fillRect(PANEL_X + 1, 14, bw - 2, 3);
-    g.fillStyle = INK; g.fillRect(PANEL_X + 1, 14, Math.round((bw - 2) * frac), 3);
-    g.font = '9px system-ui'; g.fillText(Math.round(frac * 100) + '%', PANEL_X, 30);
+  g.putImageData(id, 0, 0);
+}
+// st.done: the pass is over, only the under-layer shows (the sheet has left), like StateDone.
+function drawImage(bits, st = null) {
+  g.fillStyle = BACK; g.fillRect(0, 0, LCD_W, LCD_H);
+  const done = !!(st && st.doneS != null);
+  const frac = st ? Math.min(1, st.frac) : 0;
+  const y0 = Math.round(SHEET_Y - frac * (SHEET_Y + P.PREVIEW_H));
+  if (done || (st && y0 <= 0)) drawUnderLayer();
+  if (!done) {
+    // paper: background box so it covers the layer underneath, then the preview and its frame
+    const top = Math.max(0, y0), bottom = Math.min(SHEET_BOTTOM, y0 + P.PREVIEW_H - 1);
+    if (bottom >= top) { g.fillStyle = BACK; g.fillRect(SHEET_X, top, P.PREVIEW_W, bottom - top + 1); }
+    const pv = previewOf(bits);
+    g.fillStyle = INK;
+    for (let y = 0; y < P.PREVIEW_H; y++) {
+      const sy = y0 + y; if (sy < 0 || sy > SHEET_BOTTOM) continue;
+      for (let x = 0; x < P.PREVIEW_W; x++)
+        if ((pv[y * P.PREVIEW_LINE_BYTES + (x >> 3)] >> (7 - (x & 7))) & 1) g.fillRect(SHEET_X + x, sy, 1, 1);
+    }
+    g.fillRect(SHEET_X - 1, y0 - 1, P.PREVIEW_W + 2, 1); g.fillRect(SHEET_X - 1, y0 + P.PREVIEW_H, P.PREVIEW_W + 2, 1);
+    g.fillRect(SHEET_X - 1, y0 - 1, 1, P.PREVIEW_H + 2); g.fillRect(SHEET_X + P.PREVIEW_W, y0 - 1, 1, P.PREVIEW_H + 2);
   }
+  drawPanel(st);
+  snap1bit();
 }
 drawImage(images[0].bits);
 
@@ -77,14 +156,19 @@ async function loadFile(file) {
 
 // Precompute the tone played at every symbol of the pass, for the LED.
 function symbolSchedule(bits) {
-  const { frames, total } = buildPhysical(bits, images[index].name);
+  const { frames, total, coded } = buildPhysical(bits, images[index].name);
   const tones = [];
-  for (let i = 0; i < P.LEADER_SYMBOLS; i++) tones.push({ t: i % P.NUM_TONES, sync: false });
+  for (let i = 0; i < P.LEADER_SYMBOLS; i++) tones.push({ t: P.leaderSymbol(i), sync: false }); // tone ladder
+  const lock = lockFrame();
+  for (let f = 0; f < P.LOCK_FRAMES; f++) { // lock frames
+    tones.push({ t: -1, sync: true });
+    for (let s = 0; s < P.SYMBOLS_PER_FRAME; s++) tones.push({ t: frameSymbol(lock, 0, s), sync: false });
+  }
   for (let f = 0; f < total; f++) {
     tones.push({ t: -1, sync: true });
     for (let s = 0; s < P.SYMBOLS_PER_FRAME; s++) tones.push({ t: frameSymbol(frames, f * P.FRAME_BYTES, s), sync: false });
   }
-  return tones;
+  return { tones, coded, total };
 }
 
 function ledColor(entry) {
@@ -100,10 +184,14 @@ async function send() {
   const bits = images[index].bits;
   const sr = tx.sampleRate;
   const samples = new Modem(sr).image(bits, images[index].name);
-  const sched = symbolSchedule(bits);
+  const { tones: sched, coded, total } = symbolSchedule(bits);
   const symDur = P.SYMBOL_US / 1e6, syncDur = P.SYNC_US / 1e6;
-  sending = { bits, sched, symDur, syncDur };
-  await tx.play(samples, () => { sending = null; led.setAttribute('fill', '#333'); drawImage(bits); });
+  sending = { bits, sched, symDur, syncDur, coded, total };
+  await tx.play(samples, () => {
+    const doneS = Math.round(tx.duration);
+    sending = null; led.setAttribute('fill', '#333');
+    drawImage(bits, { label: 'Done', frac: 1, doneS }); // stays until the next button press
+  });
 }
 
 function frameFor(t) {
@@ -118,12 +206,15 @@ function frameFor(t) {
 }
 
 function tick() {
-  if (sending && tx.playing) {
+  if (noteSending && tx.playing) {
+    const t = tx.elapsed();
+    drawNote(noteSending, { label: 'TX note', frac: Math.min(1, t / tx.duration), leftS: tx.duration - t, frames: 0 });
+  } else if (sending && tx.playing) {
     const t = tx.elapsed();
     const i = frameFor(t);
     led.setAttribute('fill', ledColor(sending.sched[i]));
     const frac = Math.min(1, t / tx.duration);
-    drawImage(sending.bits, Math.floor(frac * P.HEIGHT));
+    drawImage(sending.bits, { label: sending.coded ? 'TX zip' : 'TX raw', frac, leftS: tx.duration - t, frames: sending.total });
   }
   requestAnimationFrame(tick);
 }
@@ -135,7 +226,7 @@ act('right', () => { if (!tx.playing) { index = (index + 1) % images.length; dra
 act('left', () => { if (!tx.playing) { index = (index + images.length - 1) % images.length; drawImage(images[index].bits); } });
 act('ok', send);
 document.getElementById('send').addEventListener('click', send);
-document.getElementById('stop').addEventListener('click', () => { tx.stop(); sending = null; led.setAttribute('fill', '#333'); drawImage(images[index].bits); });
+document.getElementById('stop').addEventListener('click', () => { tx.stop(); sending = null; noteSending = null; led.setAttribute('fill', '#333'); drawImage(images[index].bits); });
 document.getElementById('file').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') document.getElementById('right').dispatchEvent(new Event('click'));
@@ -168,20 +259,35 @@ function noteName(text) {
   const s = translit((text.split('\n')[0] || '')).slice(0, P.NOTE_NAME_MAX).trim();
   return s || 'note';
 }
-function drawNote(text) {
-  g.fillStyle = BACK; g.fillRect(0, 0, LCD_W, LCD_H);
-  g.fillStyle = INK; g.fillRect(1, 2, PANEL_X - 6, 50);
-  g.fillStyle = BACK; g.fillRect(2, 3, PANEL_X - 8, 48);
-  g.fillStyle = INK; g.font = '8px system-ui'; g.textBaseline = 'top';
-  const maxW = PANEL_X - 12, words = text.split(/\s+/); let line = '', y = 5, lines = 0;
-  for (const w of words) {
-    const cand = line ? line + ' ' + w : w;
-    if (g.measureText(cand).width > maxW && line) { g.fillText(line, 4, y); y += 10; line = w; if (++lines >= 4) { line = ''; break; } }
-    else line = cand;
+// Word wrap with a hard break of overlong words, like note_draw_wrapped() on the device.
+function wrapLines(str, maxW, maxLines) {
+  const out = [];
+  for (const para of str.split('\n')) {
+    let line = '';
+    for (const ch of para) {
+      const cand = line + ch;
+      if (FONT.width(cand) <= maxW) { line = cand; continue; }
+      const sp = line.lastIndexOf(' ');
+      if (ch === ' ') { out.push(line); line = ''; }
+      else if (sp > 0) { out.push(line.slice(0, sp)); line = line.slice(sp + 1) + ch; }
+      else { out.push(line); line = ch; }
+      if (out.length >= maxLines) return out;
+    }
+    out.push(line);
+    if (out.length >= maxLines) return out;
   }
-  if (line && lines < 4) g.fillText(line, 4, y);
-  g.fillRect(PANEL_X - 3, 0, 1, LCD_H);
-  g.font = 'bold 9px system-ui'; g.textBaseline = 'alphabetic'; g.fillText('TX note', PANEL_X, 10);
+  return out;
+}
+// A note has no picture sheet: the text in a paper box, the panel on the right (sstv_app.c).
+function drawNote(str, st = null) {
+  g.fillStyle = BACK; g.fillRect(0, 0, LCD_W, LCD_H);
+  g.fillStyle = INK;
+  const fx = 1, fy = 2, fw = PANEL_X - 5, fh = 50;
+  box(fx, fy, fw, 1); box(fx, fy + fh - 1, fw, 1); box(fx, fy, 1, fh); box(fx + fw - 1, fy, 1, fh);
+  const fh1 = FONT.height, lh = fh1 + 2, maxLines = Math.max(1, Math.floor((fh - 4) / lh));
+  wrapLines(str, PANEL_X - 11, maxLines).forEach((ln, i) => text(ln, 4, fy + fh1 + i * lh));
+  drawPanel(st);
+  snap1bit();
 }
 const noteEl = document.getElementById('note-text');
 const presetEl = document.getElementById('note-preset');
@@ -196,9 +302,9 @@ async function sendNote() {
   const sr = tx.sampleRate;
   const samples = new Modem(sr).note(text, noteName(text));
   sending = null;
+  noteSending = text;
   led.setAttribute('fill', '#39f');
-  drawNote(text);
-  await tx.play(samples, () => { led.setAttribute('fill', '#333'); drawImage(images[index].bits); });
+  await tx.play(samples, () => { noteSending = null; led.setAttribute('fill', '#333'); drawImage(images[index].bits); });
 }
 document.getElementById('send-note').addEventListener('click', sendNote);
 if (noteEl) noteEl.addEventListener('input', () => drawNote(noteEl.value));

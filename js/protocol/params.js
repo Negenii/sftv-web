@@ -56,7 +56,6 @@ export const SYNC_DUTY_PCT = 50;
 export const FSYNC_HZ = 5500;
 export const SYMBOL_US = 4000;
 export const SYNC_US = 16000;
-export const LEADER_US = 2000000;
 export const WINDOW_US = 2000;
 export const SYNC_WINDOW_MULT = 4;
 export const SAMPLE_POINT = 0.95;
@@ -67,10 +66,24 @@ export const SYNC_GAIN_TAU_S = 3.0;
 export const SYNC_MIN_REL = 0.15;
 export const GAIN_CLAMP = 100.0;
 export const SYNC_MIN_MS = 6;
+// Near-ultrasound band (see sstv_params.h): same protocol, tones 18.0/18.5/19.0 kHz, sync 21 kHz
+export const BAND_AUDIBLE = 0, BAND_HF = 1;
+// 8-FSK (revision 10): 7 tones + silence, 3 bits per symbol, 110 symbols per frame
+export const MAX_TONES = 8, HF_NUM_TONES = 8, HF_BITS_PER_SYMBOL = 3;
+export const HF_TONES_HZ = [17000, 17500, 18000, 18500, 19000, 19500, 20000, 20500]; // no silence (see sstv_params.h)
+export const HF_HAS_SILENCE = false;
+export const HF_FSYNC_HZ = 21000;
+export const HF_SYMBOL_US = 3000, HF_WINDOW_US = 2000; // 2 ms / 1 ms failed on hardware, see sstv_params.h
+export const HF_NOISE_FLOOR_LSB = 5.0;
+export const SYNC_DOMINANCE = 1.2; // sync must beat every data detector by this (was 3; see sstv_params.h)
+// Start preamble (revision 9): tone ladder + lock frames
+export const LADDER_TONE_SYMBOLS = 50, LADDER_GAP_SYMBOLS = 25, LOCK_FRAMES = 3, LOCK_MATCH_BITS = 60;
 export const SYMBOLS_PER_FRAME = FRAME_BITS / BITS_PER_SYMBOL;       // 164
-export const LEADER_SYMBOLS = Math.floor(LEADER_US / SYMBOL_US);
+export const LEADER_SYMBOLS = (NUM_TONES - 1) * (LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS); // 225
+export const leaderSymbol = (i) => { const per = LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS; return (i % per) < LADDER_TONE_SYMBOLS ? 1 + Math.floor(i / per) : 0; };
 export const PHYS_US = SYNC_US + SYMBOLS_PER_FRAME * SYMBOL_US;     // 672000
 export const LINE_US = PHYS_US * SEGS_PER_LINE;
+export const PREAMBLE_US = LEADER_SYMBOLS * SYMBOL_US + LOCK_FRAMES * PHYS_US; // 2.916 s
 
 // Codec modes
 export const CODEC_RAW = 0, CODEC_RLE = 1, CODEC_XOR_RLE = 2;
@@ -78,3 +91,11 @@ export const CODEC_MAX_RECORD = 1 + LINE_BYTES;
 
 // Pass frame kinds
 export const PASS_DATA = 0, PASS_PARITY = 1, PASS_END = 2;
+
+// per-band timing (mirror of SSTV_BAND_SYMBOL_US / SSTV_BAND_PHYS_US)
+export const bandSymbolUs = (band) => (band === BAND_HF ? HF_SYMBOL_US : SYMBOL_US);
+export const bandNumTones = (band) => (band === BAND_HF ? HF_NUM_TONES : NUM_TONES);
+export const bandBits = (band) => (band === BAND_HF ? HF_BITS_PER_SYMBOL : BITS_PER_SYMBOL);
+export const bandSymbolsPerFrame = (band) => Math.ceil(FRAME_BITS / bandBits(band)); // 164 / 110
+export const bandPhysUs = (band) => SYNC_US + bandSymbolsPerFrame(band) * bandSymbolUs(band);
+export const bandLeaderSymbols = (band) => (bandNumTones(band) - 1) * (LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS);

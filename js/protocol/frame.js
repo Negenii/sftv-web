@@ -13,6 +13,12 @@ export const segLine = (seg) => Math.floor(seg / P.SEGS_PER_LINE);
 export const segByteOffset = (seg) => (seg % P.SEGS_PER_LINE) * P.SEG_BYTES;
 
 export function frameBit(frame, off, index) { return (frame[off + (index >> 3)] >> (7 - (index & 7))) & 1; }
+// symbol with `bits` bits per symbol; bits past FRAME_BITS (last HF symbol's padding) read 0
+export function frameSymbolBits(frame, off, index, bits) {
+  let v = 0;
+  for (let b = 0; b < bits; b++) { const bi = index * bits + b; v = (v << 1) | (bi < P.FRAME_BITS ? frameBit(frame, off, bi) : 0); }
+  return v;
+}
 export function frameSymbol(frame, off, index) {
   let v = 0;
   for (let b = 0; b < P.BITS_PER_SYMBOL; b++) v = (v << 1) | frameBit(frame, off, index * P.BITS_PER_SYMBOL + b);
@@ -217,6 +223,23 @@ class Emitter {
 }
 
 // Returns {frames: Uint8Array(total*FRAME_BYTES), linesAfter: Uint8Array(total), total, coded}.
+// Lock-frame pattern of the start preamble (mirror of sstv_lock_frame): fixed LCG bytes that
+// never pass the RS check.
+export function lockFrame() {
+  const out = new Uint8Array(P.FRAME_BYTES);
+  let x = 0x5F7A;
+  for (let i = 0; i < P.FRAME_BYTES; i++) { x = (Math.imul(x, 1103515245) + 12345) >>> 0; out[i] = (x >>> 16) & 0xff; }
+  return out;
+}
+
+// mirror of sstv_is_lock_frame
+const LOCK = lockFrame();
+export function isLockFrame(frame) {
+  let diff = 0;
+  for (let i = 0; i < P.FRAME_BYTES; i++) { let x = LOCK[i] ^ frame[i]; while (x) { diff += x & 1; x >>= 1; } }
+  return diff <= P.LOCK_MATCH_BITS;
+}
+
 export function buildPhysical(imageBits, name) {
   const out = new Uint8Array(P.MAX_FRAMES * P.FRAME_BYTES);
   const linesAfter = new Uint8Array(P.MAX_FRAMES);
