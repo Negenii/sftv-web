@@ -562,7 +562,7 @@ function drawScene() {
       if (fill > 0) gfx.fillRoundRect(bx + 2, by + 2, fill, 6, 3, BLACK);
     }
   } else {
-    const hint = micState < 0 ? 'microphone access denied' : micState === 0 ? 'press "Allow mic & listen" below' : 'start a transmission on the Flipper';
+    const hint = micState < 0 ? 'microphone access denied' : micState === 0 ? 'press "Allow mic & listen" below' : 'waiting for a transmission';
     textCentered(hint, textCx, 208);
   }
 }
