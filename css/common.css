@@ -24,6 +24,19 @@ button.act:hover, label.act:hover { background: #333; }
 .topnav a.tx.active { background: #e8622a; color: #fff; }
 .topnav a.rx.active { background: #f4c20a; color: #111; }
 
-.hud { font: 11px ui-monospace, monospace; color: #6f9; opacity: .7; text-align: center;
-  width: min(620px, 94vw); height: 30px; overflow: hidden; }
-.hud > div { white-space: pre; overflow: hidden; text-overflow: ellipsis; height: 15px; line-height: 15px; }
+/* receiver diagnostics: a card with a header (mic, sample rate) and a row of labelled tiles;
+   tabular figures and fixed tile widths so nothing shifts while the numbers change */
+.hud { width: min(620px, 94vw); background: #181818; border: 1px solid #333; border-radius: 12px;
+  padding: 10px 12px 12px; font-size: 12px; }
+.hud-head { display: flex; justify-content: space-between; gap: 12px; color: #888; margin-bottom: 8px; }
+.hud-head b { color: #ccc; font-weight: 600; letter-spacing: .02em; }
+.hud-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+@media (max-width: 600px) { .hud-grid { grid-template-columns: repeat(4, 1fr); } }
+.hud-cell { background: #222; border: 1px solid #2c2c2c; border-radius: 8px; padding: 5px 8px; min-width: 0; }
+.hud-cell .k { color: #888; font-size: 11px; }
+.hud-cell .v { color: #eee; font: 600 14px/1.3 ui-monospace, SFMono-Regular, monospace; font-variant-numeric: tabular-nums;
+  white-space: nowrap; }
+.hud-cell .v.bad { color: #f87; }
+.hud-meter { height: 4px; background: #333; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.hud-meter > i { display: block; height: 100%; width: 0; background: #6c6; border-radius: 2px; }

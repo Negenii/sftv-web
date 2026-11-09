@@ -832,9 +832,25 @@ function resetAll() {
 }
 
 // ---- main loop ----
+// diagnostics card: header (mic, sample rate) + labelled tiles, built once, updated in place
 const hudEl = document.getElementById('hud');
-const hudL1 = document.createElement('div'), hudL2 = document.createElement('div');
-if (hudEl) { hudEl.textContent = ''; hudEl.append(hudL1, hudL2); }
+const hud = {};
+if (hudEl) {
+  hudEl.textContent = '';
+  const head = document.createElement('div'); head.className = 'hud-head';
+  const title = document.createElement('b'); title.textContent = 'Diagnostics';
+  hud.mic = document.createElement('span');
+  head.append(title, hud.mic);
+  const grid = document.createElement('div'); grid.className = 'hud-grid';
+  for (const [key, label] of [['frames', 'Frames'], ['ok', 'OK'], ['bad', 'Bad'], ['tiny', 'Tiny'], ['preview', 'Preview'], ['tone', 'Tone'], ['level', 'Level']]) {
+    const cell = document.createElement('div'); cell.className = 'hud-cell';
+    const k = document.createElement('div'); k.className = 'k'; k.textContent = label;
+    const v = document.createElement('div'); v.className = 'v';
+    cell.append(k, v); grid.append(cell); hud[key] = v;
+    if (key === 'level') { const m = document.createElement('div'); m.className = 'hud-meter'; hud.meter = document.createElement('i'); m.append(hud.meter); cell.append(m); }
+  }
+  hudEl.append(head, grid);
+}
 let lastStep = nowMs();
 function tick() {
   const now = nowMs();
@@ -855,13 +871,18 @@ function tick() {
   if (hudEl) {
     const st = demod ? demod.status() : { tone: -2, level: 0 };
     const tc = tinyHave.reduce((a, v) => a + v, 0), pc = previewHave.reduce((a, v) => a + v, 0);
-    // fixed-width fields: the line must not change width (it used to reflow and shift the page)
-    const num = (v, w) => String(v).padStart(w, '\u2007'); // figure space
-    const tone = st.tone < 0 ? '--' : st.tone === 8 ? 'S' : String(st.tone);
-    const l1 = `${micLabel ? 'mic: ' + micLabel : 'mic: -'} · ${(ctxRate / 1000).toFixed(1)} kHz`;
-    const l2 = `frames ${num(demod ? demod.frames : 0, 5)} · ok ${num(rx ? rx.framesOk : 0, 5)} · bad ${num(rx ? rx.framesBad : 0, 4)} · tiny ${tc}/4 · preview ${num(pc, 2)}/20 · tone ${num(tone, 2)} · level ${st.level.toFixed(2)}`;
-    if (hudL1.textContent !== l1) hudL1.textContent = l1;
-    if (hudL2.textContent !== l2) hudL2.textContent = l2;
+    const bad = rx ? rx.framesBad : 0;
+    setText(hud.mic, `${micLabel || 'no microphone yet'} · ${(ctxRate / 1000).toFixed(1)} kHz`);
+    setText(hud.frames, String(demod ? demod.frames : 0));
+    setText(hud.ok, String(rx ? rx.framesOk : 0));
+    setText(hud.bad, String(bad));
+    hud.bad.classList.toggle('bad', bad > 0);
+    setText(hud.tiny, `${tc}/4`);
+    setText(hud.preview, `${pc}/20`);
+    setText(hud.tone, st.tone < 0 ? '–' : st.tone === 8 ? 'sync' : String(st.tone));
+    setText(hud.level, st.level.toFixed(2));
+    const pct = `${Math.min(100, Math.round(st.level * 100))}%`;
+    if (hud.meter.style.width !== pct) hud.meter.style.width = pct;
   }
   if (recState === 'recording') recUi();
   requestAnimationFrame(tick);
