@@ -1903,7 +1903,7 @@ registerProcessor('capture', Capture);`;
   var animScaled = null;
   var animLine = 0;
   var animRepairing = false;
-  var gifBtn = document.getElementById("gif");
+  var saveBtn2 = document.getElementById("saveitem");
   var gifUrl = null;
   function isAnim() {
     return !!(rx && rx.anim);
@@ -1924,7 +1924,6 @@ registerProcessor('capture', Capture);`;
     animCompose = null;
     animScaled = null;
     animLine = 0;
-    if (gifBtn) gifBtn.style.display = "none";
     if (gifUrl) {
       URL.revokeObjectURL(gifUrl);
       gifUrl = null;
@@ -1983,7 +1982,6 @@ registerProcessor('capture', Capture);`;
     const gif = encodeGif(animInfo.w, animInfo.h, 2, fr, fb, animInfo.order, Math.trunc(100 / (animInfo.fps || 2)));
     if (gifUrl) URL.revokeObjectURL(gifUrl);
     gifUrl = URL.createObjectURL(new Blob([gif], { type: "image/gif" }));
-    if (gifBtn) gifBtn.style.display = "";
   }
   function drawAnimReceive(now, enow) {
     if (animHdr <= 0) {
@@ -2817,6 +2815,59 @@ registerProcessor('capture', Capture);`;
     hudEl.append(head, grid);
   }
   var lastStep = nowMs();
+  function saveKind() {
+    if (!rx) return null;
+    if (isAnim()) return gifUrl ? "GIF" : null;
+    if (isNote()) return noteGot > 0 ? "note" : null;
+    return segsDone > 0 || previewChunks > 0 ? "PNG" : null;
+  }
+  function updateSaveBtn() {
+    if (!saveBtn2) return;
+    const k = saveKind(), disp_ = k ? "" : "none", label = k === "note" ? "Save note" : `Save ${k}`;
+    if (saveBtn2.style.display !== disp_) saveBtn2.style.display = disp_;
+    if (k && saveBtn2.textContent !== label) saveBtn2.textContent = label;
+  }
+  function fileBase() {
+    return (name || "untitled").replace(/[^A-Za-z0-9_.-]/g, "_");
+  }
+  function download(href, filename) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  function saveItem() {
+    const k = saveKind();
+    if (k === "GIF") return download(gifUrl, `${fileBase()}.gif`);
+    if (k === "note") {
+      const url = URL.createObjectURL(new Blob([buildNoteText()], { type: "text/plain;charset=utf-8" }));
+      download(url, `${fileBase()}.txt`);
+      setTimeout(() => URL.revokeObjectURL(url), 5e3);
+      return;
+    }
+    if (k !== "PNG") return;
+    const c = document.createElement("canvas");
+    c.width = WIDTH;
+    c.height = HEIGHT;
+    const g = c.getContext("2d"), id = g.createImageData(WIDTH, HEIGHT), d = id.data;
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const half = x < WIDTH / 2 ? 0 : 1;
+        const black = segSeen[y] & 1 << half ? bit(img, LINE_BYTES, x, y) : placeholderBit(x, y);
+        const o = (y * WIDTH + x) * 4, v = black ? 0 : 255;
+        d[o] = d[o + 1] = d[o + 2] = v;
+        d[o + 3] = 255;
+      }
+    }
+    g.putImageData(id, 0, 0);
+    c.toBlob((b) => {
+      const url = URL.createObjectURL(b);
+      download(url, `${fileBase()}.png`);
+      setTimeout(() => URL.revokeObjectURL(url), 5e3);
+    }, "image/png");
+  }
   function tick() {
     const now = nowMs();
     if (previewDirty) {
@@ -2859,6 +2910,7 @@ registerProcessor('capture', Capture);`;
       if (hud.meter.style.width !== pct) hud.meter.style.width = pct;
     }
     if (recState === "recording") recUi();
+    updateSaveBtn();
     requestAnimationFrame(tick);
   }
   clearImage();
@@ -2897,15 +2949,7 @@ registerProcessor('capture', Capture);`;
   }, { passive: false });
   on("reset", resetAll);
   on("save", saveWav);
-  on("gif", () => {
-    if (!gifUrl) return;
-    const a = document.createElement("a");
-    a.href = gifUrl;
-    a.download = `${(name || "animation").replace(/[^A-Za-z0-9_.-]/g, "_")}.gif`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  });
+  on("saveitem", saveItem);
   if (recBtn) {
     recBtn.addEventListener("pointerdown", (e) => {
       if (e.button === 0) recToggle().catch((err) => {
