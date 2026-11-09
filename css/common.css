@@ -34,6 +34,8 @@ button.act.sample.on { border-color: #e8622a; color: #fff; background: #33261f; 
    tabular figures and fixed tile widths so nothing shifts while the numbers change */
 .hud { width: min(620px, 94vw); background: #181818; border: 1px solid #333; border-radius: 12px;
   padding: 10px 12px 12px; font-size: 12px; }
+.hud[hidden] { display: none; }
+button.act.on { border-color: #888; color: #fff; }
 .hud-head { display: flex; justify-content: space-between; gap: 12px; color: #888; margin-bottom: 8px; }
 .hud-head b { color: #ccc; font-weight: 600; letter-spacing: .02em; }
 .hud-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

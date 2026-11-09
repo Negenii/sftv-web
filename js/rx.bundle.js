@@ -2893,7 +2893,7 @@ registerProcessor('capture', Capture);`;
       drawLed();
     } else drawReceive();
     gfx.present(ctx);
-    if (hudEl) {
+    if (hudEl && !hudEl.hidden) {
       const st = demod ? demod.status() : { tone: -2, level: 0 };
       const tc = tinyHave.reduce((a, v) => a + v, 0), pc = previewHave.reduce((a, v) => a + v, 0);
       const bad = rx ? rx.framesBad : 0;
@@ -2950,6 +2950,12 @@ registerProcessor('capture', Capture);`;
   on("reset", resetAll);
   on("save", saveWav);
   on("saveitem", saveItem);
+  on("diag", () => {
+    if (!hudEl) return;
+    hudEl.hidden = !hudEl.hidden;
+    const b = document.getElementById("diag");
+    if (b) b.classList.toggle("on", !hudEl.hidden);
+  });
   if (recBtn) {
     recBtn.addEventListener("pointerdown", (e) => {
       if (e.button === 0) recToggle().catch((err) => {

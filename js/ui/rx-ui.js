@@ -939,7 +939,7 @@ function tick() {
   if (calibActive && now - calibLastMs > 3000) calibActive = false;
   if ((calibActive || calibForced) && demod) { drawCalibration(); drawLed(); } else drawReceive();
   gfx.present(ctx);
-  if (hudEl) {
+  if (hudEl && !hudEl.hidden) {
     const st = demod ? demod.status() : { tone: -2, level: 0 };
     const tc = tinyHave.reduce((a, v) => a + v, 0), pc = previewHave.reduce((a, v) => a + v, 0);
     const bad = rx ? rx.framesBad : 0;
@@ -983,6 +983,13 @@ cv.addEventListener('wheel', (e) => { if (isNote()) { e.preventDefault(); noteSc
 on('reset', resetAll);
 on('save', saveWav);
 on('saveitem', saveItem);
+// the diagnostics card shows only while its button is on
+on('diag', () => {
+  if (!hudEl) return;
+  hudEl.hidden = !hudEl.hidden;
+  const b = document.getElementById('diag');
+  if (b) b.classList.toggle('on', !hudEl.hidden);
+});
 // pointerdown, not click: the label ticks every second and must not swallow the press
 if (recBtn) {
   recBtn.addEventListener('pointerdown', (e) => { if (e.button === 0) recToggle().catch((err) => { micState = -1; alert('Mic error: ' + err.message); }); });
