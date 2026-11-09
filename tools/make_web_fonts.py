@@ -8,11 +8,11 @@ import os, sys
 from PIL import Image, ImageDraw, ImageFont
 
 KEEP = [chr(c) for c in range(0x20, 0x7F)] + ['…', '‘', '’', '“', '”', '©', 'Ⓐ', 'Ⓑ']
-SPECS = {  # Roobert font -> (our name, weight of the free font, mono)
-    'Roobert-10-Bold': ('SFTV-10-Bold', 700, False),
-    'Roobert-9-Mono-Condensed': ('SFTV-9-Mono-Condensed', 600, True),
+SPECS = {  # Roobert font -> (our name, weight of the free font, mono); EMBOLDEN: 2 px stems
+    'Roobert-10-Bold': ('SFTV-10-Bold', 600, False),
+    'Roobert-9-Mono-Condensed': ('SFTV-9-Mono-Condensed', 500, True),
     'Roobert-20-Medium': ('SFTV-20-Medium', 500, False),
-    'Roobert-11-Medium-extended': ('SFTV-11-Medium-extended', 500, False),
+    'Roobert-11-Medium-extended': ('SFTV-11-Medium-extended', 600, False),
 }
 
 
@@ -69,6 +69,57 @@ def circled(letter, cw, ch, base_y, size, font_px):
     return [[1 if img.getpixel((x, y)) > 127 else 0 for x in range(cw)] for y in range(ch)]
 
 
+def hinted(font, g, px):
+    """The glyph as FreeType draws it at its real pixel size with hinting, in 1 bit (strokes
+    land on whole pixels). Returns the ink matrix and the row of its baseline."""
+    W = px * 4
+    im = Image.new('L', (W, W), 0); d = ImageDraw.Draw(im); d.fontmode = '1'
+    d.text((px, px * 3), g, font=font, fill=255, anchor='ls')
+    b = im.getbbox()
+    if not b: return None, 0
+    m = [[1 if im.getpixel((x, y)) > 127 else 0 for x in range(b[0], b[2])] for y in range(b[1], b[3])]
+    return m, (px * 3 - 1) - b[1]   # baseline row inside the matrix
+
+
+EMBOLDEN = {'Roobert-10-Bold', 'Roobert-9-Mono-Condensed'}
+DIAGONAL = set('vVwWxXyYkKzZAM/\\<>')  # shifting these fills the gap between their strokes: drawn heavier instead
+
+
+def embolden(m):
+    """Pixel-font bold: the glyph OR itself shifted one pixel right (1 px stems become 2)."""
+    return [[1 if (x < len(r) and r[x]) or (x > 0 and r[x - 1]) else 0 for x in range(len(r) + 1)] for r in m]
+
+
+def fit_rows(m, gb, below):
+    """Fit the part under the baseline (rows after gb) into `below` rows by dropping repeated
+    rows of the descender, nearest the baseline first, then the row just under the baseline."""
+    m = [r[:] for r in m]
+    while len(m) - 1 - gb > below:
+        cand = [y for y in range(gb + 2, len(m)) if m[y] == m[y - 1]]
+        y = cand[0] if cand else gb + 1
+        del m[y]
+    return m
+
+
+def narrow(m, w):
+    """Fit the ink into w columns by dropping columns that repeat their neighbour (a stroke one
+    pixel thicker than needed), nearest the middle first; then any middle column."""
+    m = [r[:] for r in m]
+    while m and len(m[0]) > w:
+        n = len(m[0]); mid = n // 2
+        order = sorted(range(1, n - 1), key=lambda x: abs(x - mid))
+        dup = [x for x in order if all(r[x] == r[x - 1] for r in m)]
+        x = dup[0] if dup else order[0]
+        m = [r[:x] + r[x + 1:] for r in m]
+    return m
+
+
+def set_wght(f, w):
+    try: f.set_variation_by_axes([w])
+    except Exception: pass
+    return f
+
+
 def build(roobert_dir, ttf, out_dir, weights=None):
     os.makedirs(out_dir, exist_ok=True)
     for rname, (name, wght, mono) in SPECS.items():
@@ -76,17 +127,12 @@ def build(roobert_dir, ttf, out_dir, weights=None):
         head, tracking, glyphs = read_fnt(os.path.join(roobert_dir, rname + '.fnt'))
         tbl, cw, ch = table_of(roobert_dir, rname)
         idx = {g: i for i, (g, _) in enumerate(glyphs)}
-        Hm = ink(cell(tbl, cw, ch, idx['H'])); hb = bbox(Hm)
+        hb = bbox(ink(cell(tbl, cw, ch, idx['H'])))
         base_y, cap = hb[3], hb[3] - hb[1] + 1
-        # free font size with the same cap height (measured on a big render, then scaled)
-        probe = ImageFont.truetype(ttf, 400)
-        try: probe.set_variation_by_axes([wght] if 'Inter' not in ttf else [14, wght])
-        except Exception: pass
-        cap400 = probe.getbbox('H', anchor='ls'); cap400 = cap400[3] - cap400[1]
-        S = 8  # supersampling
-        font = ImageFont.truetype(ttf, round(400 * cap * S / cap400))
-        try: font.set_variation_by_axes([wght] if 'Inter' not in ttf else [14, wght])
-        except Exception: pass
+        # the pixel size whose hinted H is as tall as Roobert's
+        px = min(range(6, 48), key=lambda p: (abs(len(hinted(set_wght(ImageFont.truetype(ttf, p), wght), 'H', p)[0]) - cap), p))
+        font = set_wght(ImageFont.truetype(ttf, px), wght)
+        heavy = set_wght(ImageFont.truetype(ttf, px), 900)
         out = [(g, w) for g, w in glyphs if g in KEEP]
         cols = 16
         sheet = Image.new('RGBA', (cols * cw, ((len(out) + cols - 1) // cols) * ch), (0, 0, 0, 0))
@@ -95,30 +141,26 @@ def build(roobert_dir, ttf, out_dir, weights=None):
             cm = [[0] * cw for _ in range(ch)]
             if g in ('Ⓐ', 'Ⓑ'):
                 size = (r[2] - r[0] + 1) if r else cap + 4
-                lf = ImageFont.truetype(ttf, int(size * 0.72 * 4))  # the knocked-out letter, bold
-                try: lf.set_variation_by_axes([800])
-                except Exception: pass
+                lf = set_wght(ImageFont.truetype(ttf, int(size * 0.72 * 4)), 800)  # the knocked-out letter, bold
                 cm = circled(g == 'Ⓐ' and 'A' or 'B', cw, ch, r[3] if r else base_y, size, lf)
-                if r:  # place the disc where Roobert's is
+                if r:  # the disc where Roobert's is
                     b = bbox(cm); dx, dy = r[0] - b[0], r[1] - b[1]
                     cm = [[cm[y - dy][x - dx] if 0 <= y - dy < ch and 0 <= x - dx < cw else 0 for x in range(cw)] for y in range(ch)]
             elif g != ' ' and r:
-                big = Image.new('L', (cw * S * 3, ch * S * 3), 0)
-                ImageDraw.Draw(big).text((cw * S, (base_y + 1) * S + ch * S), g, font=font, fill=255, anchor='ls')
-                bb = big.getbbox()
-                if bb:
-                    gl = big.crop(bb)
-                    tw = (bb[2] - bb[0]) / S; th = (bb[3] - bb[1]) / S
+                diag = rname in EMBOLDEN and g in DIAGONAL
+                m, gb = hinted(heavy if diag else font, g, px)
+                if m:
+                    if rname in EMBOLDEN and not diag: m = embolden(m)
+                    m = fit_rows(m, gb, ch - 1 - base_y)        # descenders inside the cell
                     rw = r[2] - r[0] + 1
-                    if mono or tw > rw + 1: tw = min(tw, rw + (0 if mono else 1))  # squeeze to Roobert's ink width
-                    gw, gh = max(1, round(tw)), max(1, round(th))
-                    small = gl.resize((gw, gh), Image.BOX)
-                    top = round(bb[1] / S - ch) - 1  # ink top relative to the cell (baseline at base_y)
-                    left = round((r[0] + r[2] + 1) / 2 - gw / 2)
-                    for y in range(gh):
-                        for x in range(gw):
+                    if len(m[0]) > rw: m = narrow(m, rw)
+                    gw = len(m[0])
+                    left = r[0] + (rw - gw) // 2          # centred in Roobert's ink box: never closer to a neighbour
+                    top = base_y - gb                      # baselines on the same row
+                    for y, row in enumerate(m):
+                        for x, v in enumerate(row):
                             X, Y = left + x, top + y
-                            if 0 <= X < cw and 0 <= Y < ch and small.getpixel((x, y)) > 110: cm[Y][X] = 1
+                            if v and 0 <= X < cw and 0 <= Y < ch: cm[Y][X] = 1
             ox, oy = (k % cols) * cw, (k // cols) * ch
             for y in range(ch):
                 for x in range(cw):
@@ -129,7 +171,7 @@ def build(roobert_dir, ttf, out_dir, weights=None):
             if tracking: f.write(f'tracking={tracking}\n')
             f.write('\n')
             for g, w in out: f.write(('space' if g == ' ' else g) + '\t' + str(w) + '\n')
-        print(name, len(out), 'glyphs', f'{cw}x{ch}', 'cap', cap, 'baseline', base_y)
+        print(name, len(out), 'glyphs', f'{cw}x{ch}', 'cap', cap, 'px', px, 'weight', wght)
 
 
 if __name__ == '__main__':
