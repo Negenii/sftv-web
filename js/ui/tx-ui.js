@@ -93,12 +93,23 @@ function drawUnderLayer() {
   g.fillStyle = INK; line(tx - 5, by + bh - 1, tx + 2, by + bh + 3); line(tx + 1, by + bh - 1, tx + 2, by + bh + 3);
 }
 const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+// Filled box with corners cut like canvas_draw_rbox(..., 3) on the device.
+function rbox(x, y, w, h) {
+  box(x + 2, y, w - 4, h); box(x + 1, y + 1, w - 2, h - 2); box(x, y + 2, w, h - 4);
+}
 // Right-hand panel, laid out like draw_panel() in flipper/sstv_app.c.
 // st: null -> "Ready"; else { label, frac, leftS, frames }
 function drawPanel(st) {
   g.fillStyle = INK;
   box(PANEL_X - 3, 0, 1, LCD_H);
-  if (!st) { text('Ready', PANEL_X, 9); return; }
+  if (!st) { // Ready: what the picture will cost, as the device's TX panel would say it
+    text('Ready', PANEL_X, 9);
+    const i = passInfo(images[index]), mode = i.coded ? 'zip' : 'raw', pw = FONT.width(mode) + 6;
+    rbox(PANEL_X, 13, pw, 11);
+    g.fillStyle = BACK; text(mode, PANEL_X + 3, 22); g.fillStyle = INK;
+    text(mmss(i.seconds), PANEL_X, 35);
+    return;
+  }
   text(st.label, PANEL_X, 9);
   progressBar(PANEL_X, 12, LCD_W - PANEL_X, st.frac);
   g.fillStyle = INK;
@@ -169,7 +180,6 @@ async function decodeImage(file) {
 // What the picture on screen will cost before it is sent: the pass layout decides between raw and
 // compressed and gives the frame count; the air time is the tone ladder, the lock frames and the
 // frames (the same timeline the transmission plays). Cached per picture.
-const infoEl = document.getElementById('info');
 function passInfo(img) {
   if (!img.info) {
     const { total, coded } = buildPhysical(img.bits, img.name);
@@ -178,16 +188,11 @@ function passInfo(img) {
   }
   return img.info;
 }
-function showInfo() {
-  if (!infoEl) return;
-  const img = images[index], i = passInfo(img);
-  infoEl.textContent = `"${img.name}" · ${i.coded ? 'compressed' : 'raw'} · ${mmss(i.seconds)} on the air`;
-}
 
 // Sample chips: a thumbnail and a name for each built-in picture; the one on screen is lit.
 const chipsEl = document.getElementById('samples');
 const chips = [];
-function markChip() { chips.forEach((c, i) => c.classList.toggle('on', i === index)); showInfo(); }
+function markChip() { chips.forEach((c, i) => c.classList.toggle('on', i === index)); }
 function pick(i) {
   if (tx.playing) { // a sample while something is on the air: this one now instead
     const was = sending ? `"${images[sendingIndex].name}"` : noteSending ? 'the note' : 'the transmission';

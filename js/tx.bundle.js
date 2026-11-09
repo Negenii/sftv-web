@@ -3077,11 +3077,22 @@
     line(tx2 + 1, by + bh - 1, tx2 + 2, by + bh + 3);
   }
   var mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  function rbox(x, y, w, h) {
+    box(x + 2, y, w - 4, h);
+    box(x + 1, y + 1, w - 2, h - 2);
+    box(x, y + 2, w, h - 4);
+  }
   function drawPanel(st) {
     g.fillStyle = INK;
     box(PANEL_X - 3, 0, 1, LCD_H);
     if (!st) {
       text("Ready", PANEL_X, 9);
+      const i = passInfo(images[index]), mode = i.coded ? "zip" : "raw", pw = FONT.width(mode) + 6;
+      rbox(PANEL_X, 13, pw, 11);
+      g.fillStyle = BACK;
+      text(mode, PANEL_X + 3, 22);
+      g.fillStyle = INK;
+      text(mmss(i.seconds), PANEL_X, 35);
       return;
     }
     text(st.label, PANEL_X, 9);
@@ -3166,7 +3177,6 @@
       URL.revokeObjectURL(url);
     }
   }
-  var infoEl = document.getElementById("info");
   function passInfo(img) {
     if (!img.info) {
       const { total, coded } = buildPhysical(img.bits, img.name);
@@ -3175,16 +3185,10 @@
     }
     return img.info;
   }
-  function showInfo() {
-    if (!infoEl) return;
-    const img = images[index], i = passInfo(img);
-    infoEl.textContent = `"${img.name}" \xB7 ${i.coded ? "compressed" : "raw"} \xB7 ${mmss(i.seconds)} on the air`;
-  }
   var chipsEl = document.getElementById("samples");
   var chips = [];
   function markChip() {
     chips.forEach((c, i) => c.classList.toggle("on", i === index));
-    showInfo();
   }
   function pick(i) {
     if (tx.playing) {
