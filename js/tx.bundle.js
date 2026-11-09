@@ -3132,20 +3132,61 @@
     snap1bit();
   }
   drawImage(images[0].bits);
+  var statusEl = document.getElementById("status");
+  var say = (t) => {
+    if (statusEl) statusEl.textContent = t;
+  };
+  var nameOf = () => images[index].name || "image";
+  function stopTx() {
+    tx.stop();
+    sending = null;
+    noteSending = null;
+    led.setAttribute("fill", "#333");
+  }
+  async function decodeImage(file) {
+    try {
+      return await createImageBitmap(file);
+    } catch (e) {
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return img.naturalWidth ? img : null;
+    } catch (e) {
+      return null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
   async function loadFile(file) {
-    const bmp = await createImageBitmap(file);
+    const bmp = await decodeImage(file);
+    if (!bmp) {
+      say(`Can't open "${file.name}": this browser can't read that file as a picture.`);
+      return;
+    }
     const c = new OffscreenCanvas(WIDTH, HEIGHT);
     const cg = c.getContext("2d");
     cg.fillStyle = "#fff";
     cg.fillRect(0, 0, WIDTH, HEIGHT);
-    const s = Math.min(WIDTH / bmp.width, HEIGHT / bmp.height);
-    const w = bmp.width * s, h = bmp.height * s;
+    const bw = bmp.naturalWidth || bmp.width, bh = bmp.naturalHeight || bmp.height;
+    const s = Math.min(WIDTH / bw, HEIGHT / bh);
+    const w = bw * s, h = bh * s;
     cg.drawImage(bmp, (WIDTH - w) / 2, (HEIGHT - h) / 2, w, h);
     const id = cg.getImageData(0, 0, WIDTH, HEIGHT);
     const bits = ditherRGBA(id.data);
+    const was = sending ? images[sendingIndex].name : noteSending ? "the note" : null;
     images.push({ name: (file.name || "image").replace(/\.[^.]+$/, "").slice(0, NAME_MAX), bits });
     index = images.length - 1;
-    drawImage(images[index].bits);
+    if (tx.playing) {
+      stopTx();
+      say(`Stopped ${was && was !== "the note" ? `"${was}"` : was || "the transmission"}, sending "${nameOf()}".`);
+      send();
+    } else {
+      drawImage(images[index].bits);
+      say(`Loaded "${nameOf()}". Press Send to transmit it.`);
+    }
   }
   function symbolSchedule(bits) {
     const { frames, total, coded } = buildPhysical(bits, images[index].name);
@@ -3168,19 +3209,27 @@
     const b = 80 + entry.t * 28;
     return `rgb(40,60,${b})`;
   }
+  var sendingIndex = 0;
   async function send() {
-    if (tx.playing) return;
+    if (tx.playing) {
+      say(sending ? `Already sending "${images[sendingIndex].name}". Stop it first, or load another picture to replace it.` : "A note is on the air. Stop it first.");
+      return;
+    }
+    sendingIndex = index;
     const bits = images[index].bits;
     const sr = tx.sampleRate;
     const samples = new Modem(sr, TX_AMPLITUDE).setBand(BAND).image(bits, images[index].name);
     const { tones: sched, coded, total } = symbolSchedule(bits);
     const symDur = bandSymbolUs(BAND) / 1e6, syncDur = bandSyncUs(BAND) / 1e6;
     sending = { bits, sched, symDur, syncDur, coded, total };
+    if (!statusEl || !statusEl.textContent.startsWith("Stopped")) say(`Sending "${nameOf()}".`);
+    const sentName = nameOf();
     await tx.play(samples, () => {
       const doneS = Math.round(tx.duration);
       sending = null;
       led.setAttribute("fill", "#333");
       drawImage(bits, { label: "Done", frac: 1, doneS });
+      say(`Sent "${sentName}".`);
     });
   }
   function frameFor(t) {
@@ -3210,22 +3259,24 @@
     const el = document.getElementById(id);
     if (el) el.addEventListener("click", fn);
   };
-  act("right", () => {
-    if (!tx.playing) {
-      index = (index + 1) % images.length;
-      drawImage(images[index].bits);
+  var browse = (step) => {
+    if (tx.playing) {
+      say("Stop the transmission to switch pictures, or load another picture to replace it.");
+      return;
     }
-  });
-  act("left", () => {
-    if (!tx.playing) {
-      index = (index + images.length - 1) % images.length;
-      drawImage(images[index].bits);
-    }
-  });
+    index = (index + step + images.length) % images.length;
+    drawImage(images[index].bits);
+    say("");
+  };
+  act("right", () => browse(1));
+  act("left", () => browse(-1));
   act("ok", send);
   document.getElementById("send").addEventListener("click", send);
   async function sweep() {
-    if (tx.playing) return;
+    if (tx.playing) {
+      say("Stop the transmission first.");
+      return;
+    }
     const sr = tx.sampleRate, frame = Math.round(sr * 0.672), cycles = 2;
     const out = new Int16Array(frame * 20 * cycles);
     let n = 0;
@@ -3242,11 +3293,10 @@
   }
   document.getElementById("sweep").addEventListener("click", sweep);
   document.getElementById("stop").addEventListener("click", () => {
-    tx.stop();
-    sending = null;
-    noteSending = null;
-    led.setAttribute("fill", "#333");
+    const was = sending ? `"${images[sendingIndex].name}"` : noteSending ? "the note" : null;
+    stopTx();
     drawImage(images[index].bits);
+    say(was ? `Stopped ${was}.` : "");
   });
   document.getElementById("file").addEventListener("change", (e) => {
     if (e.target.files[0]) loadFile(e.target.files[0]);
@@ -3340,9 +3390,16 @@
     });
   }
   async function sendNote() {
-    if (tx.playing) return;
     const text2 = (noteEl.value || "").slice(0, NOTE_MAX_CHARS);
-    if (!text2) return;
+    if (!text2) {
+      say("Type a note first.");
+      return;
+    }
+    if (tx.playing) {
+      const was = sending ? `"${images[sendingIndex].name}"` : "the previous note";
+      stopTx();
+      say(`Stopped ${was}, sending the note.`);
+    } else say("Sending the note.");
     const sr = tx.sampleRate;
     const samples = new Modem(sr, TX_AMPLITUDE).setBand(BAND).note(text2, noteName(text2));
     sending = null;
@@ -3352,6 +3409,7 @@
       noteSending = null;
       led.setAttribute("fill", "#333");
       drawImage(images[index].bits);
+      say("Sent the note.");
     });
   }
   document.getElementById("send-note").addEventListener("click", sendNote);
