@@ -101,6 +101,7 @@
   var HF_SYNC_SYMBOLS = 8;
   var HF_SYNC_PATTERN = [0, 4, 7, 3, 6, 2, 5, 1];
   var bandSyncUs = (band) => band === BAND_HF ? HF_SYNC_SYMBOLS * HF_SYMBOL_US : SYNC_US;
+  var bandPhysUs = (band) => bandSyncUs(band) + bandSymbolsPerFrame(band) * bandSymbolUs(band);
   var bandLeaderSymbols = (band) => (bandNumTones(band) - 1) * (LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS);
 
   // js/protocol/image.js
@@ -3165,10 +3166,25 @@
       URL.revokeObjectURL(url);
     }
   }
+  var infoEl = document.getElementById("info");
+  function passInfo(img) {
+    if (!img.info) {
+      const { total, coded } = buildPhysical(img.bits, img.name);
+      const us = bandLeaderSymbols(BAND) * bandSymbolUs(BAND) + (LOCK_FRAMES + total) * bandPhysUs(BAND);
+      img.info = { coded, seconds: Math.round(us / 1e6) };
+    }
+    return img.info;
+  }
+  function showInfo() {
+    if (!infoEl) return;
+    const img = images[index], i = passInfo(img);
+    infoEl.textContent = `"${img.name}" \xB7 ${i.coded ? "compressed" : "raw"} \xB7 ${mmss(i.seconds)} on the air`;
+  }
   var chipsEl = document.getElementById("samples");
   var chips = [];
   function markChip() {
     chips.forEach((c, i) => c.classList.toggle("on", i === index));
+    showInfo();
   }
   function pick(i) {
     if (tx.playing) {

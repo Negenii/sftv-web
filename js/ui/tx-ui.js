@@ -166,10 +166,28 @@ async function decodeImage(file) {
   } catch (e) { return null; } finally { URL.revokeObjectURL(url); }
 }
 
+// What the picture on screen will cost before it is sent: the pass layout decides between raw and
+// compressed and gives the frame count; the air time is the tone ladder, the lock frames and the
+// frames (the same timeline the transmission plays). Cached per picture.
+const infoEl = document.getElementById('info');
+function passInfo(img) {
+  if (!img.info) {
+    const { total, coded } = buildPhysical(img.bits, img.name);
+    const us = P.bandLeaderSymbols(BAND) * P.bandSymbolUs(BAND) + (P.LOCK_FRAMES + total) * P.bandPhysUs(BAND);
+    img.info = { coded, seconds: Math.round(us / 1e6) };
+  }
+  return img.info;
+}
+function showInfo() {
+  if (!infoEl) return;
+  const img = images[index], i = passInfo(img);
+  infoEl.textContent = `"${img.name}" · ${i.coded ? 'compressed' : 'raw'} · ${mmss(i.seconds)} on the air`;
+}
+
 // Sample chips: a thumbnail and a name for each built-in picture; the one on screen is lit.
 const chipsEl = document.getElementById('samples');
 const chips = [];
-function markChip() { chips.forEach((c, i) => c.classList.toggle('on', i === index)); }
+function markChip() { chips.forEach((c, i) => c.classList.toggle('on', i === index)); showInfo(); }
 function pick(i) {
   if (tx.playing) { // a sample while something is on the air: this one now instead
     const was = sending ? `"${images[sendingIndex].name}"` : noteSending ? 'the note' : 'the transmission';
