@@ -3272,26 +3272,6 @@
   act("left", () => browse(-1));
   act("ok", send);
   document.getElementById("send").addEventListener("click", send);
-  async function sweep() {
-    if (tx.playing) {
-      say("Stop the transmission first.");
-      return;
-    }
-    const sr = tx.sampleRate, frame = Math.round(sr * 0.672), cycles = 2;
-    const out = new Int16Array(frame * 20 * cycles);
-    let n = 0;
-    for (let c = 0; c < cycles; c++) for (let k = 0; k < 20; k++) {
-      const f = k === 0 ? 3e3 : 12e3 + (k - 1) * 500, s0 = n;
-      for (let i = 0; i < frame; i++, n++) {
-        const t = i / sr;
-        if (t < 0.016) out[n] = Math.round(12e3 * Math.sin(2 * Math.PI * 5500 * t));
-        else if (t < 0.416) out[n] = Math.round(TX_AMPLITUDE * Math.sin(2 * Math.PI * f * t));
-      }
-    }
-    led.setAttribute("fill", "#39f");
-    await tx.play(out, () => led.setAttribute("fill", "#333"));
-  }
-  document.getElementById("sweep").addEventListener("click", sweep);
   document.getElementById("stop").addEventListener("click", () => {
     const was = sending ? `"${images[sendingIndex].name}"` : noteSending ? "the note" : null;
     stopTx();
@@ -3302,18 +3282,11 @@
     if (e.target.files[0]) loadFile(e.target.files[0]);
   });
   window.addEventListener("keydown", (e) => {
+    if (e.target.closest && e.target.closest("textarea, input, select")) return;
     if (e.key === "ArrowRight") document.getElementById("right").dispatchEvent(new Event("click"));
     else if (e.key === "ArrowLeft") document.getElementById("left").dispatchEvent(new Event("click"));
     else if (e.key === "Enter" || e.key === " ") send();
   });
-  var NOTE_PRESETS = [
-    "Hello from the browser!",
-    "Meet me at the usual spot, 7pm.",
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 - text test pattern",
-    "The quick brown fox jumps over the lazy dog.",
-    "Privet! Eto zametka - proverka UTF-8.",
-    "\u041F\u0440\u0438\u0432\u0435\u0442! \u042D\u0442\u043E \u0437\u0430\u043C\u0435\u0442\u043A\u0430 \u043D\u0430 \u0440\u0443\u0441\u0441\u043A\u043E\u043C - \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0430 UTF-8."
-  ];
   var CYR = ["a", "b", "v", "g", "d", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "h", "ts", "ch", "sh", "sch", "", "y", "", "e", "yu", "ya"];
   function translit(text2) {
     let out = "";
@@ -3373,22 +3346,6 @@
     snap1bit();
   }
   var noteEl = document.getElementById("note-text");
-  var presetEl = document.getElementById("note-preset");
-  if (presetEl) {
-    for (const p of NOTE_PRESETS) {
-      const o = document.createElement("option");
-      o.value = p;
-      o.textContent = p.slice(0, 32);
-      presetEl.appendChild(o);
-    }
-    presetEl.addEventListener("change", () => {
-      if (presetEl.value) {
-        noteEl.value = presetEl.value;
-        drawNote(presetEl.value);
-        presetEl.selectedIndex = 0;
-      }
-    });
-  }
   async function sendNote() {
     const text2 = (noteEl.value || "").slice(0, NOTE_MAX_CHARS);
     if (!text2) {

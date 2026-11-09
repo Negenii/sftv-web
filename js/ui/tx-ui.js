@@ -269,48 +269,19 @@ act('right', () => browse(1));
 act('left', () => browse(-1));
 act('ok', send);
 document.getElementById('send').addEventListener('click', send);
-// Speaker test: the Flipper HF sweep's pattern (tools/hf_sweep.mjs reads either): per 672 ms
-// frame a 16 ms 5.5 kHz sync, 400 ms of one tone, silence; step 0 = 3 kHz reference, then
-// 12.0-21.0 kHz in 500 Hz steps; two cycles. Sines at a fixed level, so a recording shows the
-// speaker's own response.
-async function sweep() {
-  if (tx.playing) { say('Stop the transmission first.'); return; }
-  const sr = tx.sampleRate, frame = Math.round(sr * 0.672), cycles = 2;
-  const out = new Int16Array(frame * 20 * cycles);
-  let n = 0;
-  for (let c = 0; c < cycles; c++) for (let k = 0; k < 20; k++) {
-    const f = k === 0 ? 3000 : 12000 + (k - 1) * 500, s0 = n;
-    for (let i = 0; i < frame; i++, n++) {
-      const t = i / sr;
-      if (t < 0.016) out[n] = Math.round(12000 * Math.sin(2 * Math.PI * 5500 * t));
-      else if (t < 0.416) out[n] = Math.round(TX_AMPLITUDE * Math.sin(2 * Math.PI * f * t));
-    }
-    void s0;
-  }
-  led.setAttribute('fill', '#39f');
-  await tx.play(out, () => led.setAttribute('fill', '#333'));
-}
-document.getElementById('sweep').addEventListener('click', sweep);
 document.getElementById('stop').addEventListener('click', () => {
   const was = sending ? `"${images[sendingIndex].name}"` : noteSending ? 'the note' : null;
   stopTx(); drawImage(images[index].bits); say(was ? `Stopped ${was}.` : '');
 });
 document.getElementById('file').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 window.addEventListener('keydown', (e) => {
+  if (e.target.closest && e.target.closest('textarea, input, select')) return; // typing a note, not driving the Flipper
   if (e.key === 'ArrowRight') document.getElementById('right').dispatchEvent(new Event('click'));
   else if (e.key === 'ArrowLeft') document.getElementById('left').dispatchEvent(new Event('click'));
   else if (e.key === 'Enter' || e.key === ' ') send();
 });
 
 // ---- notes ----
-const NOTE_PRESETS = [
-  'Hello from the browser!',
-  'Meet me at the usual spot, 7pm.',
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789 - text test pattern',
-  'The quick brown fox jumps over the lazy dog.',
-  'Privet! Eto zametka - proverka UTF-8.',
-  'Привет! Это заметка на русском - проверка UTF-8.',
-];
 const CYR = ['a','b','v','g','d','e','zh','z','i','y','k','l','m','n','o','p','r','s','t','u','f','h','ts','ch','sh','sch','','y','','e','yu','ya'];
 function translit(text) {
   let out = '';
@@ -358,11 +329,6 @@ function drawNote(str, st = null) {
   snap1bit();
 }
 const noteEl = document.getElementById('note-text');
-const presetEl = document.getElementById('note-preset');
-if (presetEl) {
-  for (const p of NOTE_PRESETS) { const o = document.createElement('option'); o.value = p; o.textContent = p.slice(0, 32); presetEl.appendChild(o); }
-  presetEl.addEventListener('change', () => { if (presetEl.value) { noteEl.value = presetEl.value; drawNote(presetEl.value); presetEl.selectedIndex = 0; } });
-}
 async function sendNote() {
   const text = (noteEl.value || '').slice(0, P.NOTE_MAX_CHARS);
   if (!text) { say('Type a note first.'); return; }

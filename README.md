@@ -12,7 +12,7 @@ Open it at [negenii.github.io/sftv-web](https://negenii.github.io/sftv-web/).
 
 ## Getting started
 
-To send, open Flipper · Send, load a picture or pick a note and press Send. Keep the speaker
+To send, open Flipper · Send, load a picture and press Send, or type a note and press Send note. Keep the speaker
 close to the receiver, 3–10 cm. Many laptop and phone speakers barely play 17–21 kHz: if nothing
 arrives, try headphones laid next to the receiver.
 
