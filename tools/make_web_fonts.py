@@ -114,6 +114,32 @@ def narrow(m, w):
     return m
 
 
+def squeeze(font_big, g, k, rows, w, thr=0.42):
+    """A diagonal glyph fitted into w columns: drawn k times bigger and averaged down to
+    w x rows, so its strokes keep their slant and the tip stays. narrow() drops whole columns,
+    which cuts the point off a v (only the middle columns reach its bottom rows)."""
+    im = Image.new('L', (font_big.size * 4, font_big.size * 4), 0)
+    ImageDraw.Draw(im).text((font_big.size, font_big.size * 3), g, font=font_big, fill=255, anchor='ls')
+    im = im.crop(im.getbbox()).resize((w, rows), Image.BOX)
+    return [[1 if im.getpixel((x, y)) >= thr * 255 else 0 for x in range(w)] for y in range(rows)]
+
+
+def thicken(m):
+    """A stroke left one pixel wide by squeeze() gets its second pixel on the side the stroke
+    continues (where the row above or below has ink)."""
+    m = [r[:] for r in m]; h, w = len(m), len(m[0])
+    for y in range(h):
+        r = m[y]; x = 0
+        while x < w:
+            if r[x] and (x == 0 or not r[x - 1]) and (x + 1 >= w or not r[x + 1]):
+                near = lambda c: 0 <= c < w and any(m[yy][c] for yy in (y - 1, y + 1) if 0 <= yy < h)
+                if x + 1 < w and near(x + 1): r[x + 1] = 1
+                elif x > 0: r[x - 1] = 1
+                x += 2
+            else: x += 1
+    return m
+
+
 def set_wght(f, w):
     try: f.set_variation_by_axes([w])
     except Exception: pass
@@ -150,10 +176,18 @@ def build(roobert_dir, ttf, out_dir, weights=None):
                 diag = rname in EMBOLDEN and g in DIAGONAL
                 m, gb = hinted(heavy if diag else font, g, px)
                 if m:
-                    if rname in EMBOLDEN and not diag: m = embolden(m)
-                    m = fit_rows(m, gb, ch - 1 - base_y)        # descenders inside the cell
                     rw = r[2] - r[0] + 1
+                    if g in DIAGONAL and (len(m[0]) > rw or rw - len(m[0]) >= 2):   # too wide, or a gap beside it
+                        # the hinted rows stay (height, baseline); only the width is resampled
+                        big = set_wght(ImageFont.truetype(ttf, px * 8), 900 if diag else wght)
+                        m = thicken(squeeze(big, g, 8, len(m), rw))
+                    elif rname in EMBOLDEN and not diag: m = embolden(m)
+                    m = fit_rows(m, gb, ch - 1 - base_y)        # descenders inside the cell
                     if len(m[0]) > rw: m = narrow(m, rw)
+                    if g == 'N' and not rname in EMBOLDEN:   # Figtree's hinted N has a 1 px left stem
+                        rows = [y for y, row in enumerate(m) if row[0]]
+                        if sum(1 for y in rows if not m[y][1]) > len(rows) // 2:
+                            for y in rows: m[y][1] = 1
                     gw = len(m[0])
                     left = r[0] + (rw - gw) // 2          # centred in Roobert's ink box: never closer to a neighbour
                     top = base_y - gb                      # baselines on the same row
