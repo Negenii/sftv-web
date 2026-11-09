@@ -3205,28 +3205,28 @@
     drawImage(images[index].bits);
     say(`Picked "${nameOf()}". Press Send to transmit it.`);
   }
+  function thumbOf(bits, tw, th) {
+    const id = new ImageData(tw, th), sx = WIDTH / tw, sy = HEIGHT / th;
+    for (let ty = 0; ty < th; ty++) for (let tx2 = 0; tx2 < tw; tx2++) {
+      let white = 0, n = 0;
+      for (let y = Math.floor(ty * sy); y < Math.floor((ty + 1) * sy); y++)
+        for (let x = Math.floor(tx2 * sx); x < Math.floor((tx2 + 1) * sx); x++, n++)
+          if (!(bits[y * LINE_BYTES + (x >> 3)] >> 7 - (x & 7) & 1)) white++;
+      const v = Math.round(255 * white / n), o = (ty * tw + tx2) * 4;
+      id.data[o] = id.data[o + 1] = id.data[o + 2] = v;
+      id.data[o + 3] = 255;
+    }
+    return id;
+  }
   if (chipsEl) {
-    const big = document.createElement("canvas");
-    big.width = WIDTH;
-    big.height = HEIGHT;
-    const bg = big.getContext("2d"), id = bg.createImageData(WIDTH, HEIGHT);
     for (let i = 0; i < SAMPLE_COUNT; i++) {
-      const b = images[i].bits;
-      for (let y = 0; y < HEIGHT; y++) for (let x = 0; x < WIDTH; x++) {
-        const v = b[y * LINE_BYTES + (x >> 3)] >> 7 - (x & 7) & 1 ? 0 : 255, o = (y * WIDTH + x) * 4;
-        id.data[o] = id.data[o + 1] = id.data[o + 2] = v;
-        id.data[o + 3] = 255;
-      }
-      bg.putImageData(id, 0, 0);
       const btn = document.createElement("button");
       btn.className = "act sample";
       btn.type = "button";
       const th = document.createElement("canvas");
       th.width = 60;
       th.height = 36;
-      const tg = th.getContext("2d");
-      tg.imageSmoothingQuality = "high";
-      tg.drawImage(big, 0, 0, 60, 36);
+      th.getContext("2d").putImageData(thumbOf(images[i].bits, 60, 36), 0, 0);
       const label = document.createElement("span");
       label.textContent = images[i].name;
       btn.append(th, label);
