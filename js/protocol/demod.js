@@ -7,6 +7,7 @@ const TABLE_BITS = 10, TABLE_SIZE = 1 << TABLE_BITS; // 1024
 const SYNC_DET = P.MAX_TONES; // 8 (after the data tones of either band)
 const FLYWHEEL_FRAMES = 3;
 const IDLE = 0, SYNC = 1, DATA = 2;
+const HIST = 64; // pattern-sync history, in hops
 
 const sine = new Int32Array(TABLE_SIZE);
 (function tableInit() {
@@ -68,6 +69,11 @@ export class Demod {
     this.margin = new Float32Array(P.FRAME_BITS);
     this.syncPeak = 0;
     this.flywheelLeft = 0; this.flywheelFrames = 0; this.frames = 0;
+    this.syncUs = P.SYNC_US;
+    // pattern sync (HF): shares of the energy per hop, the pattern's correlation (sstv_demod.c)
+    this.pattern = false; this.hop = 1; this.hopCount = 0; this.hopDecay = 1;
+    this.shareHist = Array.from({ length: HIST }, () => new Float64Array(P.MAX_TONES)); this.histPos = 0;
+    this.score = 0; this.scorePrev = 0; this.scorePrev2 = 0; this.syncScore = 0; this.patternsSeen = 0;
   }
 
   detPush(dt, newS, oldS, window) {
@@ -138,7 +144,7 @@ export class Demod {
   }
 
   startFrame(t0, realEdge) {
-    const symbols = (P.SYNC_US + this.spf * this.symbolUs) / this.symbolUs;
+    const symbols = (this.syncUs + this.spf * this.symbolUs) / this.symbolUs;
     if (realEdge) this.flywheelLeft = FLYWHEEL_FRAMES;
     else { this.flywheelLeft--; this.flywheelFrames++; }
     this.predictedEdge = t0 + symbols * this.bitLen;
@@ -172,10 +178,45 @@ export class Demod {
     this.symbolUs = P.bandSymbolUs(band);
     this.bitLen = this.sampleRate * this.symbolUs / 1e6;
     this.bitLenNominal = this.bitLen;
+    this.syncUs = P.bandSyncUs(band);
+    this.pattern = band === P.BAND_HF;
+    this.hop = Math.max(1, Math.trunc(this.window / 2)); this.hopCount = 0;
+    this.hopDecay = Math.pow(this.gainDecay, this.hop);
+    if (this.pattern) this.edgeAdjust = 0;
+  }
+
+  // Pattern sync: one hop (mirror of pattern_hop in sstv_demod.c).
+  patternHop() {
+    this.blockEnergies();
+    this.trackGains(this.hopDecay);
+    const nrm = new Float64Array(P.MAX_TONES);
+    let sum = 0, heard = false;
+    for (let k = 0; k < this.numTones; k++) { nrm[k] = this.energy[k] / this.gain[k]; sum += nrm[k]; if (this.energy[k] > this.minEnergy) heard = true; }
+    const row = this.shareHist[this.histPos];
+    for (let k = 0; k < P.MAX_TONES; k++) row[k] = heard && sum > 0 && k < this.numTones ? nrm[k] / sum : 0;
+    let sc = 0;
+    for (let k = 0; k < P.HF_SYNC_SYMBOLS; k++) {
+      const back = Math.trunc((P.HF_SYNC_SYMBOLS - 1 - k) * this.bitLen / this.hop + 0.5);
+      if (back >= HIST) { sc = 0; break; }
+      sc += this.shareHist[(this.histPos - back + HIST) % HIST][P.HF_SYNC_PATTERN[k]];
+    }
+    sc /= P.HF_SYNC_SYMBOLS;
+    this.histPos = (this.histPos + 1) % HIST;
+    this.scorePrev2 = this.scorePrev; this.scorePrev = this.score; this.score = sc;
+    if (this.state === DATA) return;
+    if (this.scorePrev >= P.SYNC_SCORE_MIN && this.scorePrev >= this.scorePrev2 && this.scorePrev > this.score) {
+      const y0 = this.scorePrev2, y1 = this.scorePrev, y2 = this.score, den = y0 - 2 * y1 + y2;
+      let delta = den < 0 ? 0.5 * (y0 - y2) / den : 0;
+      delta = Math.max(-1, Math.min(1, delta));
+      const tCenter = this.n - this.hop + delta * this.hop;
+      const t0 = tCenter + 0.5 * (this.bitLen - this.window) + 1 + this.edgeAdjust;
+      this.syncScore = this.scorePrev; this.patternsSeen++;
+      this.onMeasuredEdge(t0);
+    }
   }
 
   onMeasuredEdge(tMeas) {
-    const symbols = (P.SYNC_US + this.spf * this.symbolUs) / this.symbolUs;
+    const symbols = (this.syncUs + this.spf * this.symbolUs) / this.symbolUs;
     if (this.predictedEdge < 0 || this.flywheelLeft <= 0) {
       if (this.lastEdge >= 0) {
         const interval = tMeas - this.lastEdge;
@@ -189,8 +230,8 @@ export class Demod {
       return;
     }
     const err = tMeas - this.predictedEdge;
-    if (err > 1.5 * this.bitLen || err < -1.5 * this.bitLen) { this.startFrame(this.predictedEdge, true); return; }
-    if (this.syncPeak < 0.5 * this.syncGain) { this.startFrame(this.predictedEdge, true); return; }
+    if (err > 1.5 * this.bitLen || err < -1.5 * this.bitLen) { if (!this.pattern) this.startFrame(this.predictedEdge, true); return; }
+    if (!this.pattern && this.syncPeak < 0.5 * this.syncGain) { this.startFrame(this.predictedEdge, true); return; }
     const t0 = this.predictedEdge + 0.5 * err;
     this.bitLen += 0.2 * err / symbols;
     this.lastEdge = t0;
@@ -204,6 +245,22 @@ export class Demod {
   }
 
   feed(samples, n = samples.length) {
+    if (this.pattern) {
+      for (let idx = 0; idx < n; idx++) {
+        this.ring[this.ringPos] = samples[idx];
+        this.ringPos = (this.ringPos + 1) % RING;
+        if (++this.hopCount >= this.hop) { this.hopCount = 0; this.patternHop(); }
+        if (this.state === DATA) {
+          if (this.n >= this.nextDecision) {
+            this.decideSymbol();
+            this.nextDecision += this.bitLen;
+            if (this.symbolIndex >= this.spf) this.finishFrame();
+          }
+        } else this.maybeFlywheel();
+        this.n++;
+      }
+      return;
+    }
     const W = this.window, WL = W * P.SYNC_WINDOW_MULT;
     const longScale = 1 / (P.SYNC_WINDOW_MULT * P.SYNC_WINDOW_MULT);
     for (let idx = 0; idx < n; idx++) {

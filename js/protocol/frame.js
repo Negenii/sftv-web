@@ -38,9 +38,9 @@ function check(buf) {
   const h = (buf[0] << 8) | buf[1];
   if (crc8(buf, P.DATA_BYTES - 1) !== buf[P.DATA_BYTES - 1]) return null;
   const type = hdrType(h), index = hdrIndex(h);
-  if (type === P.FT_RAW && !(index < P.NUM_SEGS)) return null;
+  if (type === P.FT_RAW && !(index < P.NOTE_MAX_TEXT_FRAMES)) return null; // half-lines or note text
   if (type === P.FT_CODED && !(index < P.MAX_BLOCKS)) return null;
-  if (type === P.FT_PARITY && !(index < P.OUTER_GROUPS_MAX * P.OUTER_PARITY)) return null;
+  if (type === P.FT_PARITY && !(index < P.RX_GROUPS_MAX * P.OUTER_PARITY)) return null;
   if (type !== P.FT_RAW && type !== P.FT_CODED && type !== P.FT_PARITY && type !== P.FT_META) return null;
   const payload = buf.slice(2, 2 + P.PAYLOAD_BYTES);
   return { h, payload };
@@ -234,10 +234,14 @@ export function lockFrame() {
 
 // mirror of sstv_is_lock_frame
 const LOCK = lockFrame();
-export function isLockFrame(frame) {
+// Bits (of FRAME_BITS) that differ from the lock frame (sstv_lock_distance).
+export function lockDistance(frame) {
   let diff = 0;
   for (let i = 0; i < P.FRAME_BYTES; i++) { let x = LOCK[i] ^ frame[i]; while (x) { diff += x & 1; x >>= 1; } }
-  return diff <= P.LOCK_MATCH_BITS;
+  return diff;
+}
+export function isLockFrame(frame) {
+  return lockDistance(frame) <= P.LOCK_MATCH_BITS;
 }
 
 export function buildPhysical(imageBits, name) {
@@ -335,8 +339,6 @@ export function buildPhysical(imageBits, name) {
 // Builds a note pass (mirror of sstv_build_note). text is a JS string (UTF-8 on the wire).
 // Returns {frames, linesAfter, total}.
 export function buildNote(text, name) {
-  const out = new Uint8Array(P.MAX_FRAMES * P.FRAME_BYTES);
-  const linesAfter = new Uint8Array(P.MAX_FRAMES);
   const bytes = new TextEncoder().encode(text || '');
   const len = Math.min(bytes.length, P.NOTE_MAX_CHARS);
   let utf8 = false;
@@ -346,7 +348,12 @@ export function buildNote(text, name) {
   let textFrames = Math.floor((chunks + P.ILEAVE - 1) / P.ILEAVE) * P.ILEAVE;
   if (textFrames === 0) textFrames = P.ILEAVE;
   const dataFrames = P.ILEAVE + textFrames;
-  const total = (dataFrames + P.OUTER_PARITY + P.ILEAVE) & 0xffff;
+  // group 0 = START + text up to OUTER_GROUP (a short note is one group, as before), then groups
+  // of OUTER_GROUP; the emitter closes each full group on its own (mirror of sstv_build_note)
+  const total = passTotal(dataFrames, P.noteIntro(dataFrames)) & 0xffff;
+  const out = new Uint8Array(total * P.FRAME_BYTES);
+  const linesAfter = new Uint8Array(total);
+  const clamp = (v) => Math.min(v, 255); // 8-bit progress field
 
   const em = new Emitter(out, linesAfter);
   const logical = new Uint8Array(P.ILEAVE * P.FRAME_BYTES);
@@ -368,13 +375,13 @@ export function buildNote(text, name) {
       for (let k = 0; k < P.NOTE_CHUNK && o + k < len; k++) payload[k] = bytes[o + k];
       pack(hdr(P.FT_RAW, c), payload, logical, i * P.FRAME_BYTES);
     }
-    em.dataBlock(logical, block, block + P.ILEAVE);
+    em.dataBlock(logical, clamp(block), clamp(block + P.ILEAVE));
   }
 
   em.closeGroup();
   meta[0] = P.META_END;
   for (let i = 0; i < P.ILEAVE; i++) pack(hdr(P.FT_META, 1), meta, logical, i * P.FRAME_BYTES);
-  em.block(logical, textFrames, textFrames);
+  em.block(logical, clamp(textFrames), clamp(textFrames));
 
   const t = em.blocks * P.ILEAVE;
   return { frames: out.subarray(0, t * P.FRAME_BYTES), linesAfter: linesAfter.subarray(0, t), total: t };

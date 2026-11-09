@@ -15,6 +15,7 @@
   .playdate .screen { left: 60px; top: 60px; width: 400px; height: 245px; background: #b1afa8; }
   .playdate .screen canvas { position: absolute; left: 0; top: 0; width: 400px; height: 240px; image-rendering: pixelated; }
   .act.rec-on { background: #6b1f1f; border-color: #c44; }
+  .act.on { background: #3a6b3a; border-color: #5c9c5c; }
 </style>
 </head><body>
 <nav class="topnav"><a class="tx" href="tx.html">Flipper · Send</a><a class="rx active" href="rx.html">Playdate · Receive</a></nav>
@@ -38,10 +39,12 @@
     <button class="act" id="clear">Clear (A)</button>
     <button class="act" id="reset" title="Reset picture, counters and decoder; keeps the microphone">Reset</button>
     <button class="act" id="panel">Panel (▶)</button>
+    <button class="act" id="calib" title="Show the calibration screen (signal quality and tone levels) until switched off">Calibration</button>
     <button class="act" id="rec">● Record</button>
     <button class="act" id="save" style="display:none">Save WAV</button>
+    <button class="act" id="gif" style="display:none">Save GIF</button>
   </div>
   <p class="hint">Click listen and allow the microphone. Point a transmitter (this site in another tab, or a real Flipper) at the mic. The dolphin opens its mouth when it hears a signal.</p>
 </div>
-<script src="js/rx.bundle.js"></script>
+<script src="js/rx.bundle.js?v=1794222571"></script>
 </body></html>

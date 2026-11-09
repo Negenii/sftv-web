@@ -23,16 +23,17 @@ export const MAX_CODED_BLOCKS = SCHEDULE_CHUNKS * PREVIEW_CHUNK;      // 100
 export const INTRO_FRAMES = TINY_CHUNKS + PREVIEW_CHUNKS;            // 24
 export const INTRO_FRAMES_CODED = INTRO_FRAMES + SCHEDULE_CHUNKS;   // 28
 export const DATA_BYTES = 2 + PAYLOAD_BYTES + 1;                     // 29
-export const PARITY_BYTES = 12;
-export const FRAME_BYTES = DATA_BYTES + PARITY_BYTES;               // 41
-export const FRAME_BITS = FRAME_BYTES * 8;                           // 328
+export const PARITY_BYTES = 16;                                      // revision 14 (was 12)
+export const FRAME_BYTES = DATA_BYTES + PARITY_BYTES;               // 45
+export const FRAME_BITS = FRAME_BYTES * 8;                           // 360
 export const ILEAVE = 4;
 export const META_PAUSE = 5, META_RESUME = 6;
 export const META_NOTE_FLAG = 0x4000;   // START/END: this pass carries a text note
 export const META_UTF8_FLAG = 0x2000;   // note charset: set = UTF-8, clear = ASCII
-export const NOTE_MAX_CHARS = 1000;
+export const NOTE_MAX_BYTES = 65535; // revision 11: multi-group notes (see sstv_params.h)
+export const NOTE_MAX_CHARS = NOTE_MAX_BYTES; // the web builder sends the full range (the Flipper: 12000)
 export const NOTE_CHUNK = SEG_BYTES;     // 25 text bytes per RAW frame
-export const NOTE_MAX_FRAMES = Math.floor((Math.floor((NOTE_MAX_CHARS + NOTE_CHUNK - 1) / NOTE_CHUNK) + ILEAVE - 1) / ILEAVE) * ILEAVE; // 40
+export const NOTE_MAX_FRAMES = Math.floor((Math.floor((NOTE_MAX_CHARS + NOTE_CHUNK - 1) / NOTE_CHUNK) + ILEAVE - 1) / ILEAVE) * ILEAVE; // 2624
 export const NOTE_LEN_OFFSET = 3;        // START: [subtype][total lo][total hi][len lo][len hi][name...]
 export const NOTE_NAME_OFFSET = 5;
 export const NOTE_NAME_MAX = PAYLOAD_BYTES - NOTE_NAME_OFFSET; // 21
@@ -45,6 +46,10 @@ export const OUTER_PARITY = PARITY_BYTES;
 export const MAX_DATA_FRAMES = ILEAVE + INTRO_FRAMES_CODED + NUM_SEGS; // 512
 export const OUTER_GROUPS_MAX = 1 + Math.floor((MAX_DATA_FRAMES + OUTER_GROUP - 1) / OUTER_GROUP);
 export const MAX_FRAMES = MAX_DATA_FRAMES + OUTER_GROUPS_MAX * OUTER_PARITY + ILEAVE;
+export const NOTE_MAX_TEXT_FRAMES = Math.ceil(Math.ceil(NOTE_MAX_BYTES / SEG_BYTES) / ILEAVE) * ILEAVE; // 2624
+export const RX_MAX_DATA_FRAMES = ILEAVE + NOTE_MAX_TEXT_FRAMES; // 2628
+export const RX_GROUPS_MAX = 1 + Math.floor((RX_MAX_DATA_FRAMES + OUTER_GROUP - 1) / OUTER_GROUP); // 26
+export const noteIntro = (dataFrames) => Math.min(dataFrames, OUTER_GROUP); // group 0 of a note
 export const CODED_MIN_GAIN = 0.85;
 
 export const NUM_TONES = 4;
@@ -77,7 +82,7 @@ export const HF_SYMBOL_US = 3000, HF_WINDOW_US = 2000; // 2 ms / 1 ms failed on 
 export const HF_NOISE_FLOOR_LSB = 5.0;
 export const SYNC_DOMINANCE = 1.2; // sync must beat every data detector by this (was 3; see sstv_params.h)
 // Start preamble (revision 9): tone ladder + lock frames
-export const LADDER_TONE_SYMBOLS = 50, LADDER_GAP_SYMBOLS = 25, LOCK_FRAMES = 3, LOCK_MATCH_BITS = 60;
+export const LADDER_TONE_SYMBOLS = 50, LADDER_GAP_SYMBOLS = 25, LOCK_FRAMES = 3, LOCK_MATCH_BITS = 66;
 export const SYMBOLS_PER_FRAME = FRAME_BITS / BITS_PER_SYMBOL;       // 164
 export const LEADER_SYMBOLS = (NUM_TONES - 1) * (LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS); // 225
 export const leaderSymbol = (i) => { const per = LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS; return (i % per) < LADDER_TONE_SYMBOLS ? 1 + Math.floor(i / per) : 0; };
@@ -97,5 +102,8 @@ export const bandSymbolUs = (band) => (band === BAND_HF ? HF_SYMBOL_US : SYMBOL_
 export const bandNumTones = (band) => (band === BAND_HF ? HF_NUM_TONES : NUM_TONES);
 export const bandBits = (band) => (band === BAND_HF ? HF_BITS_PER_SYMBOL : BITS_PER_SYMBOL);
 export const bandSymbolsPerFrame = (band) => Math.ceil(FRAME_BITS / bandBits(band)); // 164 / 110
-export const bandPhysUs = (band) => SYNC_US + bandSymbolsPerFrame(band) * bandSymbolUs(band);
+// pattern sync (revision 13, mirror of SSTV_HF_SYNC_*): the HF frame starts with these data tones
+export const HF_SYNC_SYMBOLS = 8, HF_SYNC_PATTERN = [0, 4, 7, 3, 6, 2, 5, 1], SYNC_SCORE_MIN = 0.45;
+export const bandSyncUs = (band) => (band === BAND_HF ? HF_SYNC_SYMBOLS * HF_SYMBOL_US : SYNC_US);
+export const bandPhysUs = (band) => bandSyncUs(band) + bandSymbolsPerFrame(band) * bandSymbolUs(band);
 export const bandLeaderSymbols = (band) => (bandNumTones(band) - 1) * (LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS);

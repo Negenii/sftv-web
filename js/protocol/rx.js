@@ -8,16 +8,17 @@ export class Rx {
     this.onPixels = onPixels; this.onMeta = onMeta; this.onPreview = onPreview;
     this.onNote = onNote; this.onControl = onControl;
     this.note = false; this.noteUtf8 = false; this.noteLen = 0;
+    this.anim = false; this.merged = false; this.lastStart = null; // animation passes (revision 12)
     this.phys = new Uint8Array(P.ILEAVE * P.FRAME_BYTES);
     this.conf = new Float32Array(P.ILEAVE * P.FRAME_BYTES);
     this.count = 0; this.framesIn = 0;
     this.blocksOk = 0; this.framesOk = 0; this.framesBad = 0; this.rsCorrected = 0;
     this.coded = false;
-    this.data = Array.from({ length: P.MAX_DATA_FRAMES }, () => new Uint8Array(P.PAYLOAD_BYTES));
-    this.have = new Uint8Array(P.MAX_DATA_FRAMES);
-    this.parity = Array.from({ length: P.OUTER_GROUPS_MAX }, () => Array.from({ length: P.OUTER_PARITY }, () => new Uint8Array(P.PAYLOAD_BYTES)));
-    this.haveParity = Array.from({ length: P.OUTER_GROUPS_MAX }, () => new Uint8Array(P.OUTER_PARITY));
-    this.groupDone = new Uint8Array(P.OUTER_GROUPS_MAX);
+    this.data = Array.from({ length: P.RX_MAX_DATA_FRAMES }, () => new Uint8Array(P.PAYLOAD_BYTES));
+    this.have = new Uint8Array(P.RX_MAX_DATA_FRAMES);
+    this.parity = Array.from({ length: P.RX_GROUPS_MAX }, () => Array.from({ length: P.OUTER_PARITY }, () => new Uint8Array(P.PAYLOAD_BYTES)));
+    this.haveParity = Array.from({ length: P.RX_GROUPS_MAX }, () => new Uint8Array(P.OUTER_PARITY));
+    this.groupDone = new Uint8Array(P.RX_GROUPS_MAX);
     this.dataFrames = 0; this.passOpen = false;
     this.framesRepaired = 0; this.groupsRepaired = 0; this.repairsFailed = 0;
     this.startPass();
@@ -29,6 +30,9 @@ export class Rx {
     this.groupDone.fill(0);
     this.dataFrames = 0;
   }
+  // forget the last START: the next pass opens fresh even if it resends the same animation
+  // (call once an animation arrived complete, or the user deleted or cleared it); sstv_rx_forget
+  forget() { this.lastStart = null; }
   resetCounters() {
     this.framesIn = this.blocksOk = this.framesOk = this.framesBad = this.rsCorrected = 0;
     this.framesRepaired = this.groupsRepaired = this.repairsFailed = 0;
@@ -43,12 +47,12 @@ export class Rx {
   }
 
   dataFramesFromTotal(total, coded, note) {
-    if (note) { const d = total - P.OUTER_PARITY - P.ILEAVE; return d > 0 ? d : 0; }
+    if (note) { for (let d = 1; d <= P.RX_MAX_DATA_FRAMES; d++) if (F.passTotal(d, P.noteIntro(d)) === total) return d; return 0; }
     const intro = F.passIntro(coded);
-    for (let d = 1; d <= P.MAX_DATA_FRAMES; d++) if (F.passTotal(d, intro) === total) return d;
+    for (let d = 1; d <= P.RX_MAX_DATA_FRAMES; d++) if (F.passTotal(d, intro) === total) return d;
     return 0;
   }
-  rxIntro() { return this.note ? this.dataFrames : F.passIntro(this.coded); }
+  rxIntro() { return this.note ? P.noteIntro(this.dataFrames) : F.passIntro(this.coded); }
 
   headerForPosition(pos) {
     if (pos < P.ILEAVE) return F.hdr(P.FT_META, 0);
@@ -64,7 +68,7 @@ export class Rx {
 
   codedBlockUnpack(index) {
     const base = (index + 1) * P.ILEAVE;
-    if (base < 0 || base + P.ILEAVE > P.MAX_DATA_FRAMES) return;
+    if (base < 0 || base + P.ILEAVE > P.RX_MAX_DATA_FRAMES) return;
     let valid = 0;
     while (valid < P.ILEAVE && this.have[base + valid]) valid++;
     if (valid === 0) return;
@@ -74,11 +78,11 @@ export class Rx {
   }
 
   store(pos, payload) {
-    if (pos < 0 || pos >= P.MAX_DATA_FRAMES) return;
+    if (pos < 0 || pos >= P.RX_MAX_DATA_FRAMES) return;
     this.data[pos].set(payload.subarray(0, P.PAYLOAD_BYTES));
     this.have[pos] = 1;
     const g = F.passGroupOf(pos, this.rxIntro());
-    if (g < P.OUTER_GROUPS_MAX && !this.groupDone[g]) {
+    if (g < P.RX_GROUPS_MAX && !this.groupDone[g]) {
       for (let j = 0; j < P.OUTER_PARITY; j++) if (this.haveParity[g][j]) { this.tryRepair(g); break; }
     }
   }
@@ -87,7 +91,7 @@ export class Rx {
     const type = F.hdrType(h), index = F.hdrIndex(h);
     if (type === P.FT_PARITY) {
       const g = Math.floor(index / P.OUTER_PARITY), j = index % P.OUTER_PARITY;
-      if (g >= P.OUTER_GROUPS_MAX) return;
+      if (g >= P.RX_GROUPS_MAX) return;
       this.parity[g][j].set(payload.subarray(0, P.PAYLOAD_BYTES));
       this.haveParity[g][j] = 1;
       this.tryRepair(g);
@@ -111,14 +115,22 @@ export class Rx {
         const utf8 = (word & P.META_UTF8_FLAG) !== 0;
         const total = word & ~(P.META_CODED_FLAG | P.META_NOTE_FLAG | P.META_UTF8_FLAG);
         this.note = note;
+        this.anim = note && coded; // NOTE + CODED marks an animation stream
+        const codedPic = this.anim ? false : coded;
         if (note) { this.noteUtf8 = utf8; this.noteLen = payload[P.NOTE_LEN_OFFSET] | (payload[P.NOTE_LEN_OFFSET + 1] << 8); }
         if (sub === P.META_START && announce) {
-          if (!this.passOpen) { this.startPass(); this.passOpen = true; }
-          this.coded = coded;
+          // a fresh pass, except a resend of the same animation: its frames go on top of what the
+          // earlier attempts left (the segment CRCs catch a false-accepted frame); see sstv_rx.c
+          const same = this.lastStart && this.lastStart.every((v, k) => v === payload[k]);
+          this.merged = this.anim && !!same;
+          if (!this.merged) this.startPass();
+          this.lastStart = payload.slice(0, P.PAYLOAD_BYTES);
+          this.passOpen = true;
+          this.coded = codedPic;
         }
         if (sub === P.META_END) this.passOpen = false;
         this.dataFrames = this.dataFramesFromTotal(total, coded, note);
-        if (sub === P.META_END) for (let g = 0; g < P.OUTER_GROUPS_MAX; g++) this.tryRepair(g);
+        if (sub === P.META_END) for (let g = 0; g < P.RX_GROUPS_MAX; g++) this.tryRepair(g);
         if (announce && this.onMeta) {
           const noff = note ? P.NOTE_NAME_OFFSET : P.META_NAME_OFFSET;
           const nmax = note ? P.NOTE_NAME_MAX : P.NAME_MAX;
@@ -148,7 +160,7 @@ export class Rx {
   }
 
   tryRepair(g) {
-    if (g >= P.OUTER_GROUPS_MAX || this.groupDone[g]) return;
+    if (g >= P.RX_GROUPS_MAX || this.groupDone[g]) return;
     const intro = this.rxIntro();
     const n = this.dataFrames > 0 ? F.passGroupSize(this.dataFrames, intro, g) : (g === 0 ? intro : P.OUTER_GROUP);
     if (n <= 0) return;

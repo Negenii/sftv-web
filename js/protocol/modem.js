@@ -31,7 +31,10 @@ export class Modem {
       if (freqHz <= 0 || duty <= 0) { out[off + i] = 0; continue; }
       let a = this.amplitude * gain;
       if (a > 32767) a = 32767;
-      out[off + i] = this.phase < duty ? a | 0 : (-a) | 0;
+      // HF band: pure sines. A digital square wave's harmonics fold back under Nyquist (the 3rd of
+      // 17 kHz lands near 3 kHz at 48 kHz) and come out of the speakers audible, 7-9 dB under the
+      // signal. The Flipper's buzzer is analog, its harmonics really are ultrasonic.
+      out[off + i] = this.sine ? (a * Math.sin(2 * Math.PI * this.phase)) | 0 : (this.phase < duty ? a | 0 : (-a) | 0);
       this.phase += step;
       if (this.phase >= 1) this.phase -= 1;
     }
@@ -39,7 +42,12 @@ export class Modem {
     return n;
   }
   frame(frames, frameOff, out, off) {
-    let total = this.toneGain(this.fsync, this.syncDuty, 1, P.SYNC_US, out, off);
+    let total = 0;
+    if (this.band === P.BAND_HF) { // pattern sync (revision 13)
+      for (const v of P.HF_SYNC_PATTERN) total += this.toneGain(this.tones[v], this.duty[v], this.channelGain[v], this.symbolUs, out, off + total);
+    } else {
+      total = this.toneGain(this.fsync, this.syncDuty, 1, P.SYNC_US, out, off);
+    }
     for (let i = 0; i < this.spf; i++) {
       const v = frameSymbolBits(frames, frameOff, i, this.bits);
       total += this.toneGain(this.tones[v], this.duty[v], this.channelGain[v], this.symbolUs, out, off + total);
@@ -50,11 +58,11 @@ export class Modem {
   setBand(band) {
     if (band !== P.BAND_HF) {
       const fresh = new Modem(this.sampleRate, this.amplitude);
-      Object.assign(this, { tones: fresh.tones, duty: fresh.duty, channelGain: fresh.channelGain, fsync: fresh.fsync, symbolUs: fresh.symbolUs, band: fresh.band, bits: fresh.bits, spf: fresh.spf });
+      Object.assign(this, { tones: fresh.tones, duty: fresh.duty, channelGain: fresh.channelGain, fsync: fresh.fsync, symbolUs: fresh.symbolUs, band: fresh.band, bits: fresh.bits, spf: fresh.spf, sine: false });
       return this;
     }
     this.tones = P.HF_TONES_HZ.slice(); this.duty = this.tones.map(() => 0.5); this.channelGain = this.tones.map(() => 1);
-    this.fsync = P.HF_FSYNC_HZ; this.symbolUs = P.HF_SYMBOL_US;
+    this.fsync = P.HF_FSYNC_HZ; this.symbolUs = P.HF_SYMBOL_US; this.sine = true;
     this.band = P.BAND_HF; this.bits = P.HF_BITS_PER_SYMBOL; this.spf = P.bandSymbolsPerFrame(P.BAND_HF);
     return this;
   }

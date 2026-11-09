@@ -4,6 +4,7 @@ import { ditherRGBA, bitsToRGBA } from '../protocol/image.js';
 import { buildPhysical, frameSymbolBits, lockFrame } from '../protocol/frame.js';
 // Near-ultrasound only (the audible band is archived: git tag audible-mode-archive).
 const BAND = P.BAND_HF;
+const TX_AMPLITUDE = 30000; // sines near full scale: laptop speakers are weak at 17-21 kHz
 import { Modem } from '../protocol/modem.js';
 import { previewMake } from '../protocol/preview.js';
 import { TxAudio } from '../audio/tx-audio.js';
@@ -184,9 +185,9 @@ async function send() {
   if (tx.playing) return;
   const bits = images[index].bits;
   const sr = tx.sampleRate;
-  const samples = new Modem(sr).setBand(BAND).image(bits, images[index].name);
+  const samples = new Modem(sr, TX_AMPLITUDE).setBand(BAND).image(bits, images[index].name);
   const { tones: sched, coded, total } = symbolSchedule(bits);
-  const symDur = P.bandSymbolUs(BAND) / 1e6, syncDur = P.SYNC_US / 1e6;
+  const symDur = P.bandSymbolUs(BAND) / 1e6, syncDur = P.bandSyncUs(BAND) / 1e6;
   sending = { bits, sched, symDur, syncDur, coded, total };
   await tx.play(samples, () => {
     const doneS = Math.round(tx.duration);
@@ -227,6 +228,28 @@ act('right', () => { if (!tx.playing) { index = (index + 1) % images.length; dra
 act('left', () => { if (!tx.playing) { index = (index + images.length - 1) % images.length; drawImage(images[index].bits); } });
 act('ok', send);
 document.getElementById('send').addEventListener('click', send);
+// Speaker test: the Flipper HF sweep's pattern (tools/hf_sweep.mjs reads either): per 672 ms
+// frame a 16 ms 5.5 kHz sync, 400 ms of one tone, silence; step 0 = 3 kHz reference, then
+// 12.0-21.0 kHz in 500 Hz steps; two cycles. Sines at a fixed level, so a recording shows the
+// speaker's own response.
+async function sweep() {
+  if (tx.playing) return;
+  const sr = tx.sampleRate, frame = Math.round(sr * 0.672), cycles = 2;
+  const out = new Int16Array(frame * 20 * cycles);
+  let n = 0;
+  for (let c = 0; c < cycles; c++) for (let k = 0; k < 20; k++) {
+    const f = k === 0 ? 3000 : 12000 + (k - 1) * 500, s0 = n;
+    for (let i = 0; i < frame; i++, n++) {
+      const t = i / sr;
+      if (t < 0.016) out[n] = Math.round(12000 * Math.sin(2 * Math.PI * 5500 * t));
+      else if (t < 0.416) out[n] = Math.round(TX_AMPLITUDE * Math.sin(2 * Math.PI * f * t));
+    }
+    void s0;
+  }
+  led.setAttribute('fill', '#39f');
+  await tx.play(out, () => led.setAttribute('fill', '#333'));
+}
+document.getElementById('sweep').addEventListener('click', sweep);
 document.getElementById('stop').addEventListener('click', () => { tx.stop(); sending = null; noteSending = null; led.setAttribute('fill', '#333'); drawImage(images[index].bits); });
 document.getElementById('file').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
 window.addEventListener('keydown', (e) => {
@@ -301,7 +324,7 @@ async function sendNote() {
   const text = (noteEl.value || '').slice(0, P.NOTE_MAX_CHARS);
   if (!text) return;
   const sr = tx.sampleRate;
-  const samples = new Modem(sr).setBand(BAND).note(text, noteName(text));
+  const samples = new Modem(sr, TX_AMPLITUDE).setBand(BAND).note(text, noteName(text));
   sending = null;
   noteSending = text;
   led.setAttribute('fill', '#39f');

@@ -1,4 +1,4 @@
-// Reed-Solomon over GF(256), primitive poly 0x11D, RS_PARITY=12 parity symbols.
+// Reed-Solomon over GF(256), primitive poly 0x11D, RS_PARITY = PARITY_BYTES (16) parity symbols.
 // Faithful port of common/rs.c (rs_encode, streaming encoder, rs_decode_erasures).
 import { PARITY_BYTES } from './params.js';
 

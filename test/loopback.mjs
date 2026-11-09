@@ -45,6 +45,20 @@ const ok = linesOk(cap.got, cap.seen, img);
 const st = cap.stats();
 console.log(`loopback stripe: ${ok}/${P.HEIGHT} lines, tiny ${st.tiny}/4, preview ${st.prev}/20, ends ${st.ends}, frames ${demod.frames}`);
 
+// --- HF band, pattern sync (revision 13): JS modem -> JS demod at 48 kHz, plain and with a
+// laptop-like microphone response (17/17.5 kHz ~20 dB under 19.5 kHz) ---
+for (const [label, gains] of [['flat', null], ['laptop mic', [0.1, 0.11, 0.66, 0.6, 1.15, 1.4, 0.66, 0.46]]]) {
+  const m = new Modem(48000, 2000).setBand(P.BAND_HF);
+  if (gains) m.channelGain = gains;
+  const s = m.image(img);
+  for (let i = 0; i < s.length; i++) s[i] += ((Math.imul(i, 2654435761) >>> 24) % 9) - 4; // +-4 LSB noise
+  const c = capture();
+  const d = new Demod(48000, (frame, margin) => c.rx.phys_frame(frame, margin));
+  d.setBand(P.BAND_HF);
+  d.feed(s, s.length);
+  console.log(`hf pattern-sync loopback (${label}): ${linesOk(c.got, c.seen, img)}/${P.HEIGHT} lines, frames ${d.frames}, patterns ${d.patternsSeen}, flywheel ${d.flywheelFrames}`);
+}
+
 // --- real recording (if present) ---
 function readWav(path) {
   const buf = readFileSync(path);

@@ -6,6 +6,9 @@
 import * as P from '../protocol/params.js';
 import { Demod } from '../protocol/demod.js';
 import { Rx } from '../protocol/rx.js';
+import { lockDistance, passDataBefore, passFrameKind } from '../protocol/frame.js';
+import * as A from '../protocol/anim.js';
+import { encodeGif } from './gif.js';
 import { RxAudio } from '../audio/rx-audio.js';
 import { Gfx, BLACK, WHITE, fonts, images } from './pd-gfx.js';
 
@@ -81,8 +84,170 @@ function previewRefresh() {
   for (let line = 0; line < P.HEIGHT; line++) paintPlaceholderLine(line);
 }
 
+// ---- animation passes (revision 12): the stream sits in rx.data like note text and is decoded
+// as it arrives; the screen wipes the decoded frames in one by one (as on the Playdate) ----
+let animHdr = 0, animInfo = null, animDec = null, animSegOk = null, animStamp = -1;
+let animDisp = 0, animWipePrev = -1, animWipeRow = 0, animWipeMs = 0, animPlayPos = 0, animPlayMs = 0, animShown = 0;
+let animCompose = null, animScaled = null, animLine = 0, animRepairing = false;
+const gifBtn = document.getElementById('gif');
+let gifUrl = null;
+function isAnim() { return !!(rx && rx.anim); }
+function animReset() {
+  animHdr = 0; animInfo = null; animDec = null; animSegOk = null; animStamp = -1;
+  animDisp = 0; animWipePrev = -1; animWipeRow = 0; animWipeMs = 0; animPlayPos = 0; animPlayMs = 0; animShown = 0;
+  animCompose = null; animScaled = null; animLine = 0;
+  if (gifBtn) gifBtn.style.display = 'none';
+  if (gifUrl) { URL.revokeObjectURL(gifUrl); gifUrl = null; }
+}
+function animByte(pos) {
+  if (!rx || pos < 0 || pos >= rx.noteLen) return -1;
+  const at = P.ILEAVE + Math.floor(pos / P.NOTE_CHUNK);
+  return at < rx.have.length && rx.have[at] ? rx.data[at][pos % P.NOTE_CHUNK] : -1;
+}
+function animPump(budget, final) {
+  if (!isAnim()) return;
+  if (animHdr === 0) {
+    const r = A.parse(animByte);
+    if (r === -1) animHdr = -1;
+    else if (r) { animInfo = r.info; animHdr = r.len; animDec = new A.AnimDecoder(r.info, r.len, rx.noteLen); animSegOk = new Int8Array(A.segs(r.info.n)); }
+  }
+  if (animHdr <= 0) return;
+  // checkpoint CRCs, rechecked as frames arrive or get repaired; a range that comes right after a
+  // mismatch (a resend overwrote a false-accepted frame) means decoding again
+  const stamp = rx.framesOk + rx.framesRepaired;
+  if (stamp !== animStamp || final) {
+    animStamp = stamp;
+    for (let sg = 0; sg < animSegOk.length; sg++) {
+      if (animSegOk[sg] === 1) continue;
+      const r = animDec.segCheck(sg, animByte);
+      if (r === 1) {
+        let redo = animSegOk[sg] === -1;
+        for (let f = sg * A.ANIM_SEG; f < (sg + 1) * A.ANIM_SEG && f < animInfo.n; f++) if (animDec.state[f] === 3) redo = true;
+        if (redo) animDec.rewind();
+      }
+      animSegOk[sg] = r;
+    }
+  }
+  if (!animDec.done()) animDec.run(animByte, budget, final);
+}
+function animFramesOk() {
+  if (animHdr <= 0) return 0;
+  let n = 0;
+  for (let f = 0; f < animInfo.n; f++) if (animDec.state[f] === 2 && animSegOk[Math.floor(f / A.ANIM_SEG)] === 1) n++;
+  return n;
+}
+// the pass is over: decode what can be, hold the last good frame where a checkpoint never
+// matched, and offer a GIF (2x, the animation's own order and frame rate)
+function animFinish() {
+  animPump(1 << 30, true);
+  if (animHdr <= 0) return;
+  const fb = A.frameBytes(animInfo), fr = animDec.frames;
+  if (animFramesOk() === animInfo.n) rx.forget(); // complete: a resend starts over
+  for (let f = 0; f < animInfo.n; f++) {
+    if (animSegOk[Math.floor(f / A.ANIM_SEG)] !== -1) continue;
+    if (f > 0) fr.copyWithin(f * fb, (f - 1) * fb, f * fb); else fr.fill(0, 0, fb);
+  }
+  const gif = encodeGif(animInfo.w, animInfo.h, 2, fr, fb, animInfo.order, Math.trunc(100 / (animInfo.fps || 2)));
+  if (gifUrl) URL.revokeObjectURL(gifUrl);
+  gifUrl = URL.createObjectURL(new Blob([gif], { type: 'image/gif' }));
+  if (gifBtn) gifBtn.style.display = '';
+}
+function drawAnimReceive(now, enow) {
+  if (animHdr <= 0) { // header not in yet (or unreadable): the scene
+    drawScene();
+    drawTitleBar(started ? `Receiving: "${name}"` : 'Listening');
+    return;
+  }
+  gfx.clear(WHITE);
+  const a = animInfo, fb = A.frameBytes(a), st = A.stride(a.w), fr = animDec.frames;
+  const sc = Math.max(1, Math.min(Math.floor(LCD_COLUMNS / a.w), Math.floor((LCD_ROWS - BAR_H - 8) / a.h)));
+  const ox = (LCD_COLUMNS - a.w * sc) >> 1, oy = BAR_H + ((LCD_ROWS - BAR_H - a.h * sc) >> 1);
+  // The drawing line follows the air, not the decoder (see main.c): the byte on the air one
+  // interleave block ago, the row of that byte by animDec.rowPos, never past a decoded row,
+  // eased. Rows count across frames: g = frame * h + row.
+  const AH = a.h, totalRows = a.n * AH;
+  const decoded = Math.min(totalRows, animDec.frame * AH + (animDec.frameOpen ? Math.floor(animDec.pix / a.w) : 0));
+  let target = decoded;
+  animRepairing = false;
+  if (!finished && rx.dataFrames > 0) {
+    const df = rx.dataFrames, intro = P.noteIntro(df);
+    const phys = Math.max(0, (enow - startedMs) * 1000 / physUsNow()); // one block behind the air
+    const f0 = Math.floor(phys), frac = phys - f0;
+    // outer-code parity on the air (the Flipper's green LED): the line waits, "Verifying" says so
+    animRepairing = passFrameKind(f0, df, intro) !== P.PASS_DATA;
+    const d0 = passDataBefore(f0, df, intro), d1 = passDataBefore(f0 + 1, df, intro);
+    const bytes = (d0 + (d1 - d0) * frac - P.ILEAVE) * P.NOTE_CHUNK;
+    let lo = 0, hi = decoded;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (animDec.rowPos[mid] <= bytes) lo = mid + 1; else hi = mid; }
+    target = lo;
+    if (lo < decoded) {
+      const p0 = lo > 0 ? animDec.rowPos[lo - 1] : animHdr, p1 = animDec.rowPos[lo];
+      if (p1 > p0) target += Math.max(0, (bytes - p0) / (p1 - p0));
+    }
+    target = Math.min(target, decoded);
+  }
+  if (!rxPaused && animLine < target) {
+    const d = target - animLine, st2 = Math.max(0.25, d * 0.2);
+    animLine = d < st2 ? target : animLine + st2;
+  }
+  const caughtUp = (finished || animDec.done()) && animLine >= decoded;
+  const step = 1000 / (a.fps || 2);
+  let src, row = -1, show;
+  if (caughtUp) {
+    if (enow - animPlayMs > 5000) animPlayMs = enow;
+    while (enow - animPlayMs >= step) { animPlayMs += step; animPlayPos = (animPlayPos + 1) % a.orderLen; }
+    show = a.order[animPlayPos];
+    src = fr.subarray(show * fb, show * fb + fb);
+  } else {
+    const g = Math.floor(animLine);
+    let cur = Math.floor(g / AH), rows = g % AH;
+    if (cur >= a.n) { cur = a.n - 1; rows = AH; }
+    if (!animCompose) animCompose = new Uint8Array(fb);
+    animCompose.set(fr.subarray(cur * fb, cur * fb + rows * st), 0);
+    if (cur > 0) animCompose.set(fr.subarray((cur - 1) * fb + rows * st, cur * fb), rows * st);
+    else animCompose.fill(0, rows * st);
+    src = animCompose; show = cur;
+    if (rows < AH) row = rows;
+    animPlayMs = enow;
+  }
+  animShown = show;
+  // XBM (LSB first, 1 = black) -> scaled PBM bits (MSB first) for gfx.drawBits
+  const W = a.w * sc, H = a.h * sc, lb = (W + 7) >> 3;
+  if (!animScaled || animScaled.length !== lb * H) animScaled = new Uint8Array(lb * H);
+  animScaled.fill(0);
+  for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
+    if (!((src[y * st + (x >> 3)] >> (x & 7)) & 1)) continue;
+    for (let dy = 0; dy < sc; dy++) { const r0 = (y * sc + dy) * lb; for (let dx = 0; dx < sc; dx++) { const X = x * sc + dx; animScaled[r0 + (X >> 3)] |= 0x80 >> (X & 7); } }
+  }
+  gfx.drawBits(animScaled, W, H, lb, ox, oy);
+  gfx.fillRect(ox - 2, oy - 2, W + 4, 1, BLACK); gfx.fillRect(ox - 2, oy + H + 1, W + 4, 1, BLACK);
+  gfx.fillRect(ox - 2, oy - 2, 1, H + 4, BLACK); gfx.fillRect(ox + W + 1, oy - 2, 1, H + 4, BLACK);
+  if (row >= 0) { // the drawing line: markers at both ends, roots hanging below (as on pictures)
+    const ly = oy + row * sc;
+    gfx.fillRect(ox, ly, W, 1, BLACK);
+    gfx.fillRect(ox - 6, ly - 2, 4, 5, BLACK); gfx.fillRect(ox + W + 2, ly - 2, 4, 5, BLACK);
+    for (let rx0 = 2; rx0 < W; rx0 += 6) {
+      let len = 2 + Math.trunc(2.5 * (0.5 + 0.5 * Math.sin(now / 130 + rx0 * 0.5)));
+      if ((rx0 / 6) & 1) len += 1;
+      if (ly + 1 + len > oy + H) len = oy + H - ly - 1;
+      if (len > 0) gfx.fillRect(ox + rx0, ly + 1, 1, len, BLACK);
+    }
+  }
+  // title bar: name, frame counter and the pass progress (left of the LED)
+  gfx.fillRect(0, 0, LCD_COLUMNS, BAR_H, BLACK);
+  gfx.setFont(fontUi);
+  const fc = `${show + 1}/${a.n}`, bw = 64, right = LCD_COLUMNS - 34;
+  const frac = passProgress(enow);
+  if (frac >= 0 && !finished) drawMiniBar(right - bw, (BAR_H - 8) >> 1, bw, 8, frac);
+  const fcx = right - bw - 8 - gfx.textWidth(fc);
+  gfx.drawText(fc, fcx, (BAR_H - fontUi.height) >> 1, true);
+  gfx.setFont(fontGlyph);
+  gfx.drawText(fitText(name, fcx - 20), 10, (BAR_H - fontGlyph.height) >> 1, true);
+}
+
 function clearImage() {
-  noteBuf.fill(0); noteText = '';
+  animReset();
+  noteBuf.fill(0); noteText = ''; noteScroll = 0; noteFollow = true;
   img.fill(0); disp.fill(0); segSeen.fill(0);
   previewBits.fill(0); previewHave.fill(0); tinyBits.fill(0); tinyHave.fill(0);
   previewChunks = 0; previewRefresh();
@@ -92,6 +257,7 @@ function clearImage() {
   if (rx) rx.resetCounters();
 }
 function finish(now) {
+  if (isAnim()) animFinish();
   finished = true; started = false; finishedMs = now;
   finishedLines = segsDone >> 1;
   linesReached = P.HEIGHT; revealed = P.HEIGHT;
@@ -124,12 +290,14 @@ function makeRx() {
     onMeta(nm, isEnd, total) {
       const now = nowMs(); lastBlockKind = 'meta';
       if (isEnd) { finish(now); return; }
+      calibActive = false; calibStreak = 0; // a real pass ends calibration
       clearImage();
       started = true; startedMs = now; totalFrames = total;
-      name = nm && nm.trim() ? nm : (rx.note ? `note_${++untitled}` : `untitled_${++untitled}`);
+      name = nm && nm.trim() ? nm : (rx.anim ? `anim_${++untitled}` : rx.note ? `note_${++untitled}` : `untitled_${++untitled}`);
       lastDataMs = now;
     },
     onNote(chunk, nb, buf) {
+      if (rx.anim) { lastDataMs = nowMs(); lastBlockKind = 'data'; return; } // bytes stay in rx.data
       const off = chunk * P.NOTE_CHUNK;
       for (let k = 0; k < nb && off + k < P.NOTE_MAX_CHARS; k++) noteBuf[off + k] = buf[k];
       let z = noteBuf.indexOf(0); if (z < 0) z = noteBuf.length;
@@ -193,10 +361,95 @@ function saveWav() {
   a.click();
 }
 
+// ---- calibration (the Flipper's menu > Calibrate loops the preamble's lock frame): every frame
+// is compared with the known pattern, so the bit error rate is exact. Opens after a run of lock
+// frames longer than a preamble's; once open, any frame keeps it up (far away the lock frames
+// arrive with too many errors to be recognised but still score 0); closes 3 s after frames
+// stop, or when a real pass starts. Same as calib_frame / draw_calibration on the Playdate. ----
+// CALIB_OPEN_BITS: a frame counts towards opening the screen when it differs from the lock
+// frame in at most this many of its 328 bits. Looser than LOCK_MATCH_BITS (60): a laptop mic
+// hears 17-21 kHz worse than the Playdate and the lock frames came in with 20-30 % errors; a
+// random frame differs in ~164 +- 9 bits, so 110 stays far from noise.
+const CALIB_HIST = 60, CALIB_STREAK = 4, CALIB_OPEN_BITS = 120;
+// quality = the chance that a frame with this bit error rate passes the inner RS code (at most
+// PARITY_BYTES / 2 bad bytes of FRAME_BYTES, a byte bad with p = 1 - (1 - ber)^8); see main.c
+function frameOkProb(ber) {
+  const pb = 1 - Math.pow(1 - ber, 8);
+  if (pb >= 1) return 0;
+  let term = Math.pow(1 - pb, P.FRAME_BYTES), sum = 0;
+  for (let k = 0; k <= P.PARITY_BYTES / 2; k++) { sum += term; term *= (P.FRAME_BYTES - k) / (k + 1) * pb / (1 - pb); }
+  return Math.min(1, sum);
+}
+let calibForced = false; // the page's Calibration toggle: screen up regardless of lock frames
+let calibActive = false, calibLastMs = -1e9, calibStreak = 0, calibN = 0, calibFlyPrev = 0, calibBer = 0;
+const calibScore = new Uint8Array(CALIB_HIST), calibSync = new Uint8Array(CALIB_HIST);
+function calibFrame(frame, now, d) {
+  const dist = lockDistance(frame);
+  const real = d.flywheelFrames === calibFlyPrev;
+  calibFlyPrev = d.flywheelFrames;
+  if (dist <= CALIB_OPEN_BITS) {
+    calibLastMs = now;
+    if (++calibStreak >= CALIB_STREAK && !calibActive && (!started || finished)) { calibActive = true; calibN = 0; }
+  } else {
+    calibStreak = 0;
+  }
+  if (!calibActive && !calibForced) return;
+  calibLastMs = now;
+  calibBer = dist / P.FRAME_BITS;
+  const sc = 100 * frameOkProb(calibBer);
+  calibScore[calibN % CALIB_HIST] = Math.round(sc);
+  calibSync[calibN % CALIB_HIST] = real ? 1 : 0;
+  calibN++;
+}
+const fontBig = fonts['Roobert-20-Medium'] || fontUi;
+function drawRect(x, y, w, h, c) {
+  gfx.fillRect(x, y, w, 1, c); gfx.fillRect(x, y + h - 1, w, 1, c);
+  gfx.fillRect(x, y, 1, h, c); gfx.fillRect(x + w - 1, y, 1, h, c);
+}
+function drawCalibration() {
+  gfx.clear(WHITE);
+  drawTitleBar('Calibration');
+  const n = Math.min(calibN, CALIB_HIST);
+  let sum = 0, cnt = 0;
+  for (let k = 0; k < 3 && k < n; k++) { sum += calibScore[(calibN - 1 - k + CALIB_HIST) % CALIB_HIST]; cnt++; }
+  const score = cnt ? Math.trunc(sum / cnt) : 0;
+  gfx.setFont(fontUi);
+  gfx.drawText('quality', 16, 40);
+  gfx.setFont(fontBig);
+  gfx.drawText(`${score}%`, 16, 56);
+  gfx.setFont(fontUi);
+  gfx.drawText(`errors: ${(calibBer * 100).toFixed(1)}%`, 16, 96);
+  // "sync" while frames come in on their own sync tone; gone when it is lost
+  const syncOk = n > 0 && calibSync[(calibN - 1) % CALIB_HIST];
+  if (syncOk && nowMs() - calibLastMs < 1000) gfx.drawText('sync', 16, 114);
+  // graph: one 4 px bar per frame, newest on the right; dashed line at 60
+  const gx = 140, gy = 40, gw = CALIB_HIST * 4, gh = 100;
+  drawRect(gx - 1, gy - 1, gw + 2, gh + 2, BLACK);
+  for (let x = gx; x < gx + gw; x += 6) gfx.fillRect(x, gy + gh - gh * 60 / 100, 3, 1, BLACK);
+  for (let k = 0; k < n; k++) {
+    const idx = (calibN - n + k) % CALIB_HIST, h = Math.trunc(calibScore[idx] * gh / 100), x = gx + (CALIB_HIST - n + k) * 4;
+    if (h > 0) gfx.fillRect(x, gy + gh - h, 3, h, BLACK);
+    if (!calibSync[idx]) gfx.fillRect(x, gy + gh + 3, 3, 2, BLACK);
+  }
+  // per-tone level in dB over the noise floor, 0..40: they drop together with distance
+  const labels = ['17', '17.5', '18', '18.5', '19', '19.5', '20', '20.5'];
+  gfx.setFont(fontNum);
+  const by = 222, bmax = 60;
+  for (let k = 0; k < demod.numTones && k < labels.length; k++) {
+    let db = 10 * Math.log10(demod.gain[k] / demod.minEnergy + 1e-12);
+    db = Math.max(0, Math.min(40, db));
+    const h = Math.round(bmax * db / 40), x = 16 + k * 48;
+    drawRect(x, by - bmax, 30, bmax, BLACK);
+    if (h > 0) gfx.fillRect(x, by - h, 30, h, BLACK);
+    gfx.drawText(labels[k], x + 15 - (gfx.textWidth(labels[k]) >> 1), by + 3);
+  }
+}
+
 function makeDemod(sr, band) {
   const d = new Demod(sr, (frame, margin) => {
     const now = nowMs();
     ledFrameMs = now;
+    calibFrame(frame, now, d);
     const before = rx.blocksOk, kindBefore = lastBlockKind;
     lastBlockKind = 'parity'; // stays so unless a data/meta callback fires for this frame
     rx.phys_frame(frame, margin);
@@ -282,7 +535,7 @@ function sceneDolphin(now) {
   }
   return images.frame_51;
 }
-function isNote() { return !!(rx && rx.note); }
+function isNote() { return !!(rx && rx.note && !rx.anim); }
 
 // Intro scene: the dolphin sends the preview to a Playdate.
 function drawScene() {
@@ -290,11 +543,12 @@ function drawScene() {
   gfx.clear(WHITE);
   const cx = 240, cy = 60, dx = 20, dy = cy + ((CONSOLE.h - DOLPHIN_H * 2) >> 1), textCx = LCD_COLUMNS >> 1;
   gfx.drawImage(sceneDolphin(now), dx, dy, { mode: 'ink', scale: 2 });
-  drawConsole(cx, cy, started && !isNote());
+  drawConsole(cx, cy, started && !isNote() && !isAnim());
   gfx.setFont(fontUi);
   if (started) {
     drawSpout(dx + 70, dy + 2, cx + CONSOLE.sx + (CONSOLE.sw >> 1), cy + CONSOLE.sy + (CONSOLE.sh >> 1), (now % 1200) / 1200);
-    if (isNote()) textCentered('Receiving note', textCx, 200);
+    if (isAnim()) textCentered(animHdr < 0 ? 'Animation header unreadable' : 'Receiving animation', textCx, 200);
+    else if (isNote()) textCentered('Receiving note', textCx, 200);
     else if (segsDone === 0) {
       const introTotal = P.INTRO_FRAMES + (rx && rx.coded ? P.SCHEDULE_CHUNKS : 0) + P.OUTER_PARITY;
       let est = (now - startedMs) / (physUsNow() / 1000);
@@ -313,7 +567,32 @@ function drawScene() {
   }
 }
 
-function drawStickyNote(x, y, w, h, text) {
+// Word wrap cached per text/width (a 64 KB note must not be re-measured every frame).
+let noteLay = { text: null, width: 0, lines: [] };
+function layoutNote(text, width) {
+  if (noteLay.text === text && noteLay.width === width) return noteLay.lines;
+  gfx.setFont(fontNotes);
+  const lines = [];
+  for (const para of text.split('\n')) {
+    let line = '';
+    for (const word of para.split(' ').filter(Boolean)) {
+      const cand = line ? line + ' ' + word : word;
+      if (gfx.textWidth(cand) <= width || !line) line = cand;
+      else { lines.push(line); line = word; }
+    }
+    lines.push(line);
+  }
+  noteLay = { text, width, lines };
+  return lines;
+}
+let noteScroll = 0, noteFollow = true; // receive view scroll (px); follow the newest text until the wheel is used
+function noteMaxScroll(w, h, text) {
+  const margin = w < 120 ? 4 : 10, lineH = fontNotes.height + 2;
+  return Math.max(0, layoutNote(text, w - 2 * margin - 6).length * lineH - (h - 2 * margin));
+}
+// Sticky note (mirror of the Playdate's draw_sticky_note_scrolled): scroll in px, with a bar
+// on the right when the text is longer than the note.
+function drawStickyNote(x, y, w, h, text, scroll = 0) {
   const fold = w < 120 ? 8 : 16;
   gfx.fillRect(x, y, w, h, WHITE);
   gfx.drawLine(x, y, x + w - fold, y, 1, BLACK);
@@ -326,19 +605,24 @@ function drawStickyNote(x, y, w, h, text) {
   gfx.drawLine(x + w - fold, y + fold, x + w, y + fold, 1, WHITE);
   gfx.setFont(fontNotes);
   const fh = fontNotes.height, margin = w < 120 ? 4 : 10, lineH = fh + 2;
-  const tx = x + margin, right = x + w - margin, bottom = y + h - margin;
-  let ty = y + margin, line = '';
-  const flush = () => { if (line && ty + fh <= bottom) gfx.drawText(line, tx, ty); ty += lineH; line = ''; };
-  for (const para of text.split('\n')) {
-    for (const word of para.split(' ').filter(Boolean)) {
-      const cand = line ? line + ' ' + word : word;
-      if (tx + gfx.textWidth(cand) <= right || !line) line = cand;
-      else { flush(); line = word; }
-      if (ty + fh > bottom) return;
-    }
-    flush();
-    if (ty + fh > bottom) return;
+  const top = y + margin, innerH = h - 2 * margin;
+  const lines = layoutNote(text, w - 2 * margin - 6);
+  const content = lines.length * lineH, maxScroll = Math.max(0, content - innerH);
+  const off = Math.min(Math.max(0, scroll), maxScroll);
+  gfx.setClipRect(x + 1, top, w - 2, innerH);
+  for (let i = Math.floor(off / lineH); i < lines.length; i++) {
+    const ty = top + i * lineH - off;
+    if (ty > top + innerH) break;
+    if (lines[i]) gfx.drawText(lines[i], x + margin, ty);
   }
+  gfx.clearClipRect();
+  if (maxScroll > 0) {
+    const bx = x + w - margin - 2, bh = Math.max(8, Math.floor(innerH * innerH / content));
+    const by = top + Math.floor((innerH - bh) * off / maxScroll);
+    gfx.fillRect(bx, top, 1, innerH, BLACK);
+    gfx.fillRect(bx - 1, by, 3, bh, BLACK);
+  }
+  return off;
 }
 
 function passProgress(enow) {
@@ -373,26 +657,26 @@ function drawPanel() {
   gfx.fillRect(x0, 0, PANEL_W, LCD_ROWS, WHITE);
   gfx.drawLine(x0, 0, x0, LCD_ROWS, 1, BLACK);
   const x = x0 + 8, right = x0 + PANEL_W - 8;
-  let y = 8;
+  let y = 6;
   gfx.setFont(fontUi);
-  const lh = fontUi.height + 3;
+  const lh = fontUi.height + 1; // compact rows: everything stays above the hint line
   gfx.drawText(fitText(name || '-', PANEL_W - 36), x, y);
-  y += lh + 4;
+  y += lh + 3;
   const quiet = segsDone > 0 && !finished && !rxPaused && now - lastDataMs > LOST_TIMEOUT_MS;
   const state = rxPaused ? 'PAUSE' : finished ? 'DONE' : segsDone === P.NUM_SEGS ? 'DONE' : quiet ? 'LOST' : (segsDone > 0 || started) ? 'RX' : 'IDLE';
   let px = x;
   px += drawPill(state, px, y, true) + 5;
-  px += drawPill(isNote() ? 'TXT' : rx && rx.coded ? 'ZIP' : 'RAW', px, y, false) + 5;
-  y += fontUi.height + 12;
+  px += drawPill(isAnim() ? 'ANI' : isNote() ? 'TXT' : rx && rx.coded ? 'ZIP' : 'RAW', px, y, false) + 5;
+  y += fontUi.height + 9;
   const barW = PANEL_W - 16;
   gfx.drawRoundRect(x, y, barW, 8, 4, 1, BLACK);
-  const got = isNote() ? noteText.length : segsDone;
-  const tot = isNote() ? (rx.noteLen > 0 ? rx.noteLen : Math.max(1, got)) : P.NUM_SEGS;
+  const got = isAnim() ? (animHdr > 0 ? animDec.framesDone : 0) : isNote() ? noteText.length : segsDone;
+  const tot = isAnim() ? (animHdr > 0 ? animInfo.n : 1) : isNote() ? (rx.noteLen > 0 ? rx.noteLen : Math.max(1, got)) : P.NUM_SEGS;
   const fill = Math.min(barW - 2, Math.trunc((barW - 2) * got / tot));
   if (fill > 0) gfx.fillRoundRect(x + 1, y + 1, fill, 6, 3, BLACK);
-  y += 12;
-  gfx.drawText(isNote() ? `${noteText.length} / ${rx.noteLen} chars` : `${segsDone >> 1} / ${P.HEIGHT} lines`, x, y);
-  y += lh + 6;
+  y += 11;
+  gfx.drawText(isAnim() ? `${got} / ${animHdr > 0 ? animInfo.n : 0} frames` : isNote() ? `${noteText.length} / ${rx.noteLen} chars` : `${segsDone >> 1} / ${P.HEIGHT} lines`, x, y);
+  y += lh + 4;
   const rows = [['recv', rx ? rx.framesIn : 0], ['preview', previewChunks], ['frames ok/bad', rx ? `${rx.framesOk}/${rx.framesBad}` : '0/0'],
     ['rs fixed/fixed', rx ? `${rx.rsCorrected}/${rx.framesRepaired}` : '0/0'], ['flywheel', demod ? demod.flywheelFrames : 0]];
   for (const [k, v] of rows) {
@@ -400,24 +684,31 @@ function drawPanel() {
     gfx.setFont(fontNum); const s = String(v); gfx.drawText(s, right - gfx.textWidth(s), y + 1);
     y += lh;
   }
-  y += 6;
+  // tone: one lamp per data tone (8 in the HF band, 17.0-20.5 kHz), the one heard filled (the
+  // sync is a pattern of these tones since revision 13)
+  y += 4;
   gfx.setFont(fontUi); gfx.drawText('tone', x, y);
   const st = demod ? demod.status() : { tone: -1 };
-  const r = 7, gap = 8, cx0 = x + 44, ccy = y + (fontUi.height >> 1);
-  for (let k = 0; k < 3; k++) {
-    const ccx = cx0 + k * (2 * r + gap);
-    if (st.tone === k + 1) gfx.fillEllipse(ccx, ccy - r, 2 * r, 2 * r, 0, 0, BLACK);
+  const nt = demod ? demod.numTones - demod.firstDet : 8;
+  const r = 5, step = 2 * r + 4, cx0 = x + 40, ccy = y + (fontUi.height >> 1);
+  for (let k = 0; k < nt; k++) {
+    const ccx = cx0 + k * step;
+    if (demod && st.tone === k + demod.firstDet) gfx.fillEllipse(ccx, ccy - r, 2 * r, 2 * r, 0, 0, BLACK);
     else gfx.drawEllipse(ccx, ccy - r, 2 * r, 2 * r, 1, 0, 0, BLACK);
   }
-  gfx.drawLine(x0, LCD_ROWS - 20, LCD_COLUMNS, LCD_ROWS - 20, 1, BLACK);
-  gfx.setFont(fontGlyph); gfx.drawText('🅐 clear', x, LCD_ROWS - 18);
+  // hints: sized from the glyph font (22 px line) so they stay on screen
+  gfx.setFont(fontGlyph);
+  const hy = LCD_ROWS - fontGlyph.height - 1;
+  gfx.drawLine(x0, hy - 3, LCD_COLUMNS, hy - 3, 1, BLACK);
+  gfx.drawText('Ⓐ clear', x, hy);
 }
 
 function drawFinishedBanner() {
   const now = nowMs();
   if (!finished || now - finishedMs > 6000) return;
   gfx.setFont(fontUi);
-  const t = isNote() ? `Received note "${name}"  ${rx.noteLen} chars` : `Received "${name}"   ${finishedLines}/${P.HEIGHT} lines`;
+  const t = isAnim() ? `Received "${name}"   ${animFramesOk()}/${animHdr > 0 ? animInfo.n : 0} frames`
+    : isNote() ? `Received note "${name}"  ${rx.noteLen} chars` : `Received "${name}"   ${finishedLines}/${P.HEIGHT} lines`;
   const w = gfx.textWidth(t) + 24, h = fontUi.height + 16, x = (LCD_COLUMNS - w) >> 1, y = LCD_ROWS - h - 14;
   gfx.fillRoundRect(x, y, w, h, h >> 1, BLACK);
   gfx.drawText(t, x + 12, y + 8, true);
@@ -431,7 +722,7 @@ function stepAnimation() {
     if (finished) frac = 1;
     else if (started) {
       const enow = rxPaused ? pauseAnchor : nowMs();
-      const textframes = rx.dataFrames > P.ILEAVE ? rx.dataFrames - P.ILEAVE : P.NOTE_MAX_FRAMES;
+      const textframes = rx.dataFrames > P.ILEAVE ? rx.dataFrames - P.ILEAVE : 40;
       const elapsed = Math.trunc((enow - startedMs) * 1000 / physUsNow());
       frac = textframes > 0 ? Math.min(1, Math.max(0, elapsed / textframes)) : 1;
     }
@@ -451,11 +742,35 @@ function stepAnimation() {
 
 function drawReceive() {
   const now = nowMs(), enow = rxPaused ? pauseAnchor : now;
+  if (isAnim() && (started || finished)) {
+    drawAnimReceive(now, enow);
+    if (animHdr > 0 && animRepairing && started && !finished && !rxPaused) {
+      gfx.setFont(fontUi);
+      const v = 'Verifying', r = 6, sp = 2 * r, pad = 10, gap = 6, tw = gfx.textWidth(v);
+      const w = pad + sp + gap + tw + pad, h = 24, bx = LCD_COLUMNS - w - 10, by = LCD_ROWS - h - 10;
+      gfx.fillRoundRect(bx, by, w, h, h >> 1, BLACK);
+      spinner(bx + pad, by + ((h - sp) >> 1), sp, now);
+      gfx.drawText(v, bx + pad + sp + gap, by + ((h - fontUi.height) >> 1), true);
+    }
+    if (rxPaused) {
+      gfx.setFont(fontUi);
+      const pm = 'Paused - waiting for sender', w = gfx.textWidth(pm) + 28, h = 28, bx = (LCD_COLUMNS - w) >> 1, by = BAR_H + 12;
+      gfx.fillRoundRect(bx, by, w, h, h >> 1, BLACK);
+      gfx.drawText(pm, bx + 14, by + ((h - fontUi.height) >> 1), true);
+    }
+    if (showPanel && demod) drawPanel();
+    drawFinishedBanner();
+    drawLed();
+    return;
+  }
   const y = Math.round(sheetY);
   if (isNote() && (started || finished)) {
     if (y > 0) drawScene(); else gfx.clear(WHITE);
     const nx = 22, nw = LCD_COLUMNS - 44, nh = LCD_ROWS - y - 12;
-    if (nh > 24) drawStickyNote(nx, y, nw, nh, noteText);
+    if (nh > 24) {
+      if (noteFollow) noteScroll = noteMaxScroll(nw, nh, noteText);
+      noteScroll = drawStickyNote(nx, y, nw, nh, noteText, noteScroll);
+    }
   } else {
     const shown = finished ? P.HEIGHT : Math.round(revealed);
     let frontier = Math.min(LCD_ROWS, y + shown);
@@ -530,10 +845,12 @@ function tick() {
   }
   // END never came: the pass is over by the announced timeline plus a margin
   if (started && !rxPaused && totalFrames > 0 && now - startedMs > (totalFrames - P.ILEAVE) * (physUsNow() / 1000) + 4000) finish(now);
+  if (isAnim() && started && !finished) animPump(4096, false);
   let steps = 0;
   while (now - lastStep >= 1000 / 30 && steps < 10) { stepAnimation(); lastStep += 1000 / 30; steps++; }
   if (steps === 10) lastStep = now;
-  drawReceive();
+  if (calibActive && now - calibLastMs > 3000) calibActive = false;
+  if ((calibActive || calibForced) && demod) { drawCalibration(); drawLed(); } else drawReceive();
   gfx.present(ctx);
   if (hudEl) {
     const st = demod ? demod.status() : { tone: -2, level: 0 };
@@ -556,19 +873,38 @@ tick();
 // ---- controls ----
 const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
 on('listen', () => listen().catch((e) => { micState = -1; alert('Mic error: ' + e.message); }));
-on('clear', clearImage);
+// Calibration toggle (outside the device): the calibration screen stays up until switched off,
+// whatever arrives; the tone bars are live from the microphone even before any frame
+const calibBtn = document.getElementById('calib');
+on('calib', () => {
+  calibForced = !calibForced;
+  if (calibForced && !demod) listen().catch((e) => { micState = -1; alert('Mic error: ' + e.message); });
+  if (calibForced) calibN = 0;
+  if (calibBtn) calibBtn.classList.toggle('on', calibForced);
+  if (calibBtn) calibBtn.textContent = calibForced ? 'Calibration: on' : 'Calibration';
+});
+const clearAll = () => { clearImage(); if (rx) rx.forget(); }; // clear means clear: no merging into it
+on('clear', clearAll);
+// mouse wheel / trackpad scrolls a note, like the Playdate's crank
+cv.addEventListener('wheel', (e) => { if (isNote()) { e.preventDefault(); noteScroll += e.deltaY * 0.5; noteFollow = false; } }, { passive: false });
 on('reset', resetAll);
 on('save', saveWav);
+on('gif', () => {
+  if (!gifUrl) return;
+  const a = document.createElement('a');
+  a.href = gifUrl; a.download = `${(name || 'animation').replace(/[^A-Za-z0-9_.-]/g, '_')}.gif`;
+  document.body.appendChild(a); a.click(); a.remove();
+});
 // pointerdown, not click: the label ticks every second and must not swallow the press
 if (recBtn) {
   recBtn.addEventListener('pointerdown', (e) => { if (e.button === 0) recToggle().catch((err) => { micState = -1; alert('Mic error: ' + err.message); }); });
   recBtn.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); recToggle(); } });
 }
-on('a', clearImage);
+on('a', clearAll);
 on('panel', () => { showPanel = !showPanel; });
 on('right', () => { showPanel = !showPanel; });
 document.addEventListener('keydown', (e) => {
   if (e.target && e.target.tagName === 'TEXTAREA') return;
-  if (e.key === 'a') clearImage();
+  if (e.key === 'a') clearAll();
   if (e.key === 'ArrowRight') showPanel = !showPanel;
 });

@@ -32,13 +32,14 @@
   var INTRO_FRAMES = TINY_CHUNKS + PREVIEW_CHUNKS;
   var INTRO_FRAMES_CODED = INTRO_FRAMES + SCHEDULE_CHUNKS;
   var DATA_BYTES = 2 + PAYLOAD_BYTES + 1;
-  var PARITY_BYTES = 12;
+  var PARITY_BYTES = 16;
   var FRAME_BYTES = DATA_BYTES + PARITY_BYTES;
   var FRAME_BITS = FRAME_BYTES * 8;
   var ILEAVE = 4;
   var META_NOTE_FLAG = 16384;
   var META_UTF8_FLAG = 8192;
-  var NOTE_MAX_CHARS = 1e3;
+  var NOTE_MAX_BYTES = 65535;
+  var NOTE_MAX_CHARS = NOTE_MAX_BYTES;
   var NOTE_CHUNK = SEG_BYTES;
   var NOTE_MAX_FRAMES = Math.floor((Math.floor((NOTE_MAX_CHARS + NOTE_CHUNK - 1) / NOTE_CHUNK) + ILEAVE - 1) / ILEAVE) * ILEAVE;
   var NOTE_LEN_OFFSET = 3;
@@ -57,6 +58,10 @@
   var MAX_DATA_FRAMES = ILEAVE + INTRO_FRAMES_CODED + NUM_SEGS;
   var OUTER_GROUPS_MAX = 1 + Math.floor((MAX_DATA_FRAMES + OUTER_GROUP - 1) / OUTER_GROUP);
   var MAX_FRAMES = MAX_DATA_FRAMES + OUTER_GROUPS_MAX * OUTER_PARITY + ILEAVE;
+  var NOTE_MAX_TEXT_FRAMES = Math.ceil(Math.ceil(NOTE_MAX_BYTES / SEG_BYTES) / ILEAVE) * ILEAVE;
+  var RX_MAX_DATA_FRAMES = ILEAVE + NOTE_MAX_TEXT_FRAMES;
+  var RX_GROUPS_MAX = 1 + Math.floor((RX_MAX_DATA_FRAMES + OUTER_GROUP - 1) / OUTER_GROUP);
+  var noteIntro = (dataFrames) => Math.min(dataFrames, OUTER_GROUP);
   var CODED_MIN_GAIN = 0.85;
   var NUM_TONES = 4;
   var BITS_PER_SYMBOL = 2;
@@ -93,6 +98,9 @@
   var bandNumTones = (band) => band === BAND_HF ? HF_NUM_TONES : NUM_TONES;
   var bandBits = (band) => band === BAND_HF ? HF_BITS_PER_SYMBOL : BITS_PER_SYMBOL;
   var bandSymbolsPerFrame = (band) => Math.ceil(FRAME_BITS / bandBits(band));
+  var HF_SYNC_SYMBOLS = 8;
+  var HF_SYNC_PATTERN = [0, 4, 7, 3, 6, 2, 5, 1];
+  var bandSyncUs = (band) => band === BAND_HF ? HF_SYNC_SYMBOLS * HF_SYMBOL_US : SYNC_US;
   var bandLeaderSymbols = (band) => (bandNumTones(band) - 1) * (LADDER_TONE_SYMBOLS + LADDER_GAP_SYMBOLS);
 
   // js/protocol/image.js
@@ -468,8 +476,6 @@
     return { frames: out.subarray(0, total2 * FRAME_BYTES), linesAfter: linesAfter.subarray(0, total2), total: total2, coded: useCoded };
   }
   function buildNote(text2, name) {
-    const out = new Uint8Array(MAX_FRAMES * FRAME_BYTES);
-    const linesAfter = new Uint8Array(MAX_FRAMES);
     const bytes = new TextEncoder().encode(text2 || "");
     const len = Math.min(bytes.length, NOTE_MAX_CHARS);
     let utf8 = false;
@@ -481,7 +487,10 @@
     let textFrames = Math.floor((chunks + ILEAVE - 1) / ILEAVE) * ILEAVE;
     if (textFrames === 0) textFrames = ILEAVE;
     const dataFrames = ILEAVE + textFrames;
-    const total = dataFrames + OUTER_PARITY + ILEAVE & 65535;
+    const total = passTotal(dataFrames, noteIntro(dataFrames)) & 65535;
+    const out = new Uint8Array(total * FRAME_BYTES);
+    const linesAfter = new Uint8Array(total);
+    const clamp = (v) => Math.min(v, 255);
     const em = new Emitter(out, linesAfter);
     const logical = new Uint8Array(ILEAVE * FRAME_BYTES);
     const word = (total | META_NOTE_FLAG | (utf8 ? META_UTF8_FLAG : 0)) & 65535;
@@ -505,12 +514,12 @@
         for (let k = 0; k < NOTE_CHUNK && o + k < len; k++) payload[k] = bytes[o + k];
         pack(hdr(FT_RAW, c), payload, logical, i * FRAME_BYTES);
       }
-      em.dataBlock(logical, block, block + ILEAVE);
+      em.dataBlock(logical, clamp(block), clamp(block + ILEAVE));
     }
     em.closeGroup();
     meta[0] = META_END;
     for (let i = 0; i < ILEAVE; i++) pack(hdr(FT_META, 1), meta, logical, i * FRAME_BYTES);
-    em.block(logical, textFrames, textFrames);
+    em.block(logical, clamp(textFrames), clamp(textFrames));
     const t = em.blocks * ILEAVE;
     return { frames: out.subarray(0, t * FRAME_BYTES), linesAfter: linesAfter.subarray(0, t), total: t };
   }
@@ -550,7 +559,7 @@
         }
         let a = this.amplitude * gain;
         if (a > 32767) a = 32767;
-        out[off + i] = this.phase < duty ? a | 0 : -a | 0;
+        out[off + i] = this.sine ? a * Math.sin(2 * Math.PI * this.phase) | 0 : this.phase < duty ? a | 0 : -a | 0;
         this.phase += step;
         if (this.phase >= 1) this.phase -= 1;
       }
@@ -559,7 +568,12 @@
       return n;
     }
     frame(frames, frameOff, out, off) {
-      let total = this.toneGain(this.fsync, this.syncDuty, 1, SYNC_US, out, off);
+      let total = 0;
+      if (this.band === BAND_HF) {
+        for (const v of HF_SYNC_PATTERN) total += this.toneGain(this.tones[v], this.duty[v], this.channelGain[v], this.symbolUs, out, off + total);
+      } else {
+        total = this.toneGain(this.fsync, this.syncDuty, 1, SYNC_US, out, off);
+      }
       for (let i = 0; i < this.spf; i++) {
         const v = frameSymbolBits(frames, frameOff, i, this.bits);
         total += this.toneGain(this.tones[v], this.duty[v], this.channelGain[v], this.symbolUs, out, off + total);
@@ -570,7 +584,7 @@
     setBand(band) {
       if (band !== BAND_HF) {
         const fresh = new _Modem(this.sampleRate, this.amplitude);
-        Object.assign(this, { tones: fresh.tones, duty: fresh.duty, channelGain: fresh.channelGain, fsync: fresh.fsync, symbolUs: fresh.symbolUs, band: fresh.band, bits: fresh.bits, spf: fresh.spf });
+        Object.assign(this, { tones: fresh.tones, duty: fresh.duty, channelGain: fresh.channelGain, fsync: fresh.fsync, symbolUs: fresh.symbolUs, band: fresh.band, bits: fresh.bits, spf: fresh.spf, sine: false });
         return this;
       }
       this.tones = HF_TONES_HZ.slice();
@@ -578,6 +592,7 @@
       this.channelGain = this.tones.map(() => 1);
       this.fsync = HF_FSYNC_HZ;
       this.symbolUs = HF_SYMBOL_US;
+      this.sine = true;
       this.band = BAND_HF;
       this.bits = HF_BITS_PER_SYMBOL;
       this.spf = bandSymbolsPerFrame(BAND_HF);
@@ -2965,6 +2980,7 @@
 
   // js/ui/tx-ui.js
   var BAND = BAND_HF;
+  var TX_AMPLITUDE = 3e4;
   var lcd = document.getElementById("lcd");
   var g = lcd.getContext("2d");
   var led = document.getElementById("led");
@@ -3156,9 +3172,9 @@
     if (tx.playing) return;
     const bits = images[index].bits;
     const sr = tx.sampleRate;
-    const samples = new Modem(sr).setBand(BAND).image(bits, images[index].name);
+    const samples = new Modem(sr, TX_AMPLITUDE).setBand(BAND).image(bits, images[index].name);
     const { tones: sched, coded, total } = symbolSchedule(bits);
-    const symDur = bandSymbolUs(BAND) / 1e6, syncDur = SYNC_US / 1e6;
+    const symDur = bandSymbolUs(BAND) / 1e6, syncDur = bandSyncUs(BAND) / 1e6;
     sending = { bits, sched, symDur, syncDur, coded, total };
     await tx.play(samples, () => {
       const doneS = Math.round(tx.duration);
@@ -3208,6 +3224,23 @@
   });
   act("ok", send);
   document.getElementById("send").addEventListener("click", send);
+  async function sweep() {
+    if (tx.playing) return;
+    const sr = tx.sampleRate, frame = Math.round(sr * 0.672), cycles = 2;
+    const out = new Int16Array(frame * 20 * cycles);
+    let n = 0;
+    for (let c = 0; c < cycles; c++) for (let k = 0; k < 20; k++) {
+      const f = k === 0 ? 3e3 : 12e3 + (k - 1) * 500, s0 = n;
+      for (let i = 0; i < frame; i++, n++) {
+        const t = i / sr;
+        if (t < 0.016) out[n] = Math.round(12e3 * Math.sin(2 * Math.PI * 5500 * t));
+        else if (t < 0.416) out[n] = Math.round(TX_AMPLITUDE * Math.sin(2 * Math.PI * f * t));
+      }
+    }
+    led.setAttribute("fill", "#39f");
+    await tx.play(out, () => led.setAttribute("fill", "#333"));
+  }
+  document.getElementById("sweep").addEventListener("click", sweep);
   document.getElementById("stop").addEventListener("click", () => {
     tx.stop();
     sending = null;
@@ -3311,7 +3344,7 @@
     const text2 = (noteEl.value || "").slice(0, NOTE_MAX_CHARS);
     if (!text2) return;
     const sr = tx.sampleRate;
-    const samples = new Modem(sr).setBand(BAND).note(text2, noteName(text2));
+    const samples = new Modem(sr, TX_AMPLITUDE).setBand(BAND).note(text2, noteName(text2));
     sending = null;
     noteSending = text2;
     led.setAttribute("fill", "#39f");
