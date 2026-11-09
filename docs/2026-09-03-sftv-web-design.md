@@ -21,7 +21,7 @@ ways).
 - **Wire-compatible** with the devices (identical protocol).
 - **Both roles** in v1, one tab each.
 - **Static, no framework, no build.** Plain JS ES modules, served as-is from GitHub Pages
-  (which provides the https that `getUserMedia` requires). Code in `web/` in this repo.
+  (which provides the https that `getUserMedia` requires).
 - **Image input:** upload any file; the browser scales to 400×240 and dithers with the same
   ordered Bayer matrix as `tools/img2pbm.py`.
 - **UI:** each tab is a contour silhouette (outline only) of the device it emulates — Flipper
@@ -29,7 +29,7 @@ ways).
   device's screen. The silhouette's buttons (Flipper: arrows, OK, Back; Playdate: d-pad, A, B,
   crank) are functional controls, mirrored on the keyboard.
 
-## Protocol port (`web/js/protocol/`)
+## Protocol port (`js/protocol/`)
 
 One shared core, used by both tabs. Faithful translation of `common/` using typed arrays
 (`Uint8Array` bytes, `Int16Array`/`Float32Array` samples). Modules mirror the C files:
@@ -51,7 +51,7 @@ One shared core, used by both tabs. Faithful translation of `common/` using type
 The demod is sample-rate-agnostic (it already takes the rate as a parameter), so it runs at
 the browser's 44100/48000 Hz directly.
 
-## Audio (`web/js/audio/`)
+## Audio (`js/audio/`)
 
 - **Transmit** (`tx-audio.js`): `modem.js` builds the whole pass as an `Int16Array` at
   `audioContext.sampleRate`; convert to `Float32`, wrap in an `AudioBuffer`, play through an
@@ -77,15 +77,15 @@ the browser's 44100/48000 Hz directly.
   tone is heard), the picture rising from the bottom edge, the side panel (name, state, ZIP/RAW,
   line progress, counters incl. "fixed"), the END banner. Buttons: A clears, B back, Right
   toggles the panel, the crank is decorative for now. A mic permission prompt gates listening.
-- Sprites (`web/assets/`): the dolphin (closed + open mouth) and console PNGs reused from the
+- Sprites (`assets/`): the dolphin (closed + open mouth) and console PNGs reused from the
   Playdate app.
 
-## Validation (`web/vectors/`, dev-time only)
+## Validation (`vectors/`, dev-time only)
 
 A small C harness (`tests/gen_web_vectors.c`) writes JSON vectors: GF/RS encode+erasure cases,
 CRC of known inputs, codec round-trips, a packed frame's bytes, an interleave round-trip, a
 full `buildPhysical` pass (per-frame hex) for the sample images, and a hash of the modulator
-output. A Node script (`web/test/run.mjs`, run with `node`, not shipped) imports the JS
+output. A Node script (`test/run.mjs`, run with `node`, not shipped) imports the JS
 protocol modules and asserts they reproduce the vectors. Separately it decodes the real
 `recordings/*.wav` with the JS demod and compares lines/frames/preview against the C decoder's
 numbers. Browser↔browser is tested by loopback in the page; browser↔hardware needs the user's

@@ -1,5 +1,5 @@
 /* Generates protocol vectors for the JS port: builds passes for deterministic images and
- * dumps total/coded and every physical frame as hex. Used by web/test/run.mjs. */
+ * dumps total/coded and every physical frame as hex. Used by test/run.mjs. */
 #include "sstv_frame.h"
 #include "sstv_preview.h"
 #include "sstv_params.h"

@@ -17,8 +17,8 @@ const BAR_H = 30, PANEL_W = 200, SHEET_LEAD = 50, LOST_TIMEOUT_MS = 5000, PILL_H
 const CONSOLE = { w: 140, h: 118, sx: 7, sy: 7, sw: 88, sh: 53 };
 const DOLPHIN_H = 49;
 
-const fontUi = fonts['Roobert-10-Bold'], fontNum = fonts['Roobert-9-Mono-Condensed'];
-const fontGlyph = fonts['Roobert-11-Medium-extended'], fontNotes = fonts['Notes-14'];
+const fontUi = fonts['SFTV-10-Bold'], fontNum = fonts['SFTV-9-Mono-Condensed'];
+const fontGlyph = fonts['SFTV-11-Medium-extended'], fontNotes = fonts['Notes-14'];
 
 const cv = document.getElementById('pd');
 const ctx = cv.getContext('2d');
@@ -401,7 +401,7 @@ function calibFrame(frame, now, d) {
   calibSync[calibN % CALIB_HIST] = real ? 1 : 0;
   calibN++;
 }
-const fontBig = fonts['Roobert-20-Medium'] || fontUi;
+const fontBig = fonts['SFTV-20-Medium'] || fontUi;
 function drawRect(x, y, w, h, c) {
   gfx.fillRect(x, y, w, 1, c); gfx.fillRect(x, y + h - 1, w, 1, c);
   gfx.fillRect(x, y, 1, h, c); gfx.fillRect(x + w - 1, y, 1, h, c);

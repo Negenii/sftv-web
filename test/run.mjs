@@ -1,5 +1,5 @@
-// Validates the JS protocol port against C-generated vectors (web/vectors/pass_*.txt).
-// Run: node web/test/run.mjs
+// Validates the JS protocol port against C-generated vectors (vectors/pass_*.txt).
+// Run: node test/run.mjs
 import { readFileSync } from 'node:fs';
 import * as P from '../js/protocol/params.js';
 import { buildPhysical, buildNote } from '../js/protocol/frame.js';
