@@ -1796,6 +1796,33 @@ registerProcessor('capture', Capture);`;
   var consoleBits = new Uint8Array(PREVIEW_BYTES);
   var noteBuf = new Uint8Array(NOTE_MAX_CHARS + 64);
   var noteText = "";
+  var noteHave = /* @__PURE__ */ new Set();
+  var noteGot = 0;
+  function buildNoteText() {
+    let total = rx && rx.noteLen > 0 ? rx.noteLen : 0;
+    if (!total) for (const c of noteHave) total = Math.max(total, (c + 1) * NOTE_CHUNK);
+    const chunks = Math.ceil(Math.min(total, NOTE_MAX_CHARS) / NOTE_CHUNK), out = [];
+    const gap = new TextEncoder().encode(" [...] ");
+    for (let c = 0; c < chunks; c++) {
+      if (!noteHave.has(c)) {
+        if (c === 0 || noteHave.has(c - 1)) out.push(...gap);
+        continue;
+      }
+      let a = c * NOTE_CHUNK, b = Math.min(a + NOTE_CHUNK, total);
+      if (c > 0 && !noteHave.has(c - 1)) while (a < b && (noteBuf[a] & 192) === 128) a++;
+      if (c + 1 < chunks && !noteHave.has(c + 1)) {
+        for (let k = b - 1; k >= a && k >= b - 3; k--) {
+          const u = noteBuf[k];
+          if ((u & 192) === 128) continue;
+          const need = u >= 240 ? 4 : u >= 224 ? 3 : u >= 192 ? 2 : 1;
+          if (b - k < need) b = k;
+          break;
+        }
+      }
+      for (let k = a; k < b; k++) if (noteBuf[k]) out.push(noteBuf[k]);
+    }
+    return new TextDecoder().decode(new Uint8Array(out));
+  }
   var previewChunks = 0;
   var previewDirty = false;
   var segsDone = 0;
@@ -2068,6 +2095,8 @@ registerProcessor('capture', Capture);`;
     animReset();
     noteBuf.fill(0);
     noteText = "";
+    noteHave = /* @__PURE__ */ new Set();
+    noteGot = 0;
     noteScroll = 0;
     noteFollow = true;
     img.fill(0);
@@ -2167,9 +2196,12 @@ registerProcessor('capture', Capture);`;
         }
         const off = chunk * NOTE_CHUNK;
         for (let k = 0; k < nb && off + k < NOTE_MAX_CHARS; k++) noteBuf[off + k] = buf[k];
-        let z = noteBuf.indexOf(0);
-        if (z < 0) z = noteBuf.length;
-        noteText = new TextDecoder().decode(noteBuf.subarray(0, z));
+        if (!noteHave.has(chunk)) {
+          noteHave.add(chunk);
+          const len = rx.noteLen > 0 ? rx.noteLen : NOTE_MAX_CHARS;
+          noteGot += Math.max(0, Math.min(nb, len - off));
+        }
+        noteText = buildNoteText();
         lastBlockKind = "data";
       },
       onControl(sub, arg) {
@@ -2589,12 +2621,12 @@ registerProcessor('capture', Capture);`;
     y += fontUi.height + 9;
     const barW = PANEL_W - 16;
     gfx.drawRoundRect(x, y, barW, 8, 4, 1, BLACK);
-    const got = isAnim() ? animHdr > 0 ? animDec.framesDone : 0 : isNote() ? noteText.length : segsDone;
+    const got = isAnim() ? animHdr > 0 ? animDec.framesDone : 0 : isNote() ? noteGot : segsDone;
     const tot = isAnim() ? animHdr > 0 ? animInfo.n : 1 : isNote() ? rx.noteLen > 0 ? rx.noteLen : Math.max(1, got) : NUM_SEGS;
     const fill = Math.min(barW - 2, Math.trunc((barW - 2) * got / tot));
     if (fill > 0) gfx.fillRoundRect(x + 1, y + 1, fill, 6, 3, BLACK);
     y += 11;
-    gfx.drawText(isAnim() ? `${got} / ${animHdr > 0 ? animInfo.n : 0} frames` : isNote() ? `${noteText.length} / ${rx.noteLen} chars` : `${segsDone >> 1} / ${HEIGHT} lines`, x, y);
+    gfx.drawText(isAnim() ? `${got} / ${animHdr > 0 ? animInfo.n : 0} frames` : isNote() ? `${noteGot} / ${rx.noteLen} chars` : `${segsDone >> 1} / ${HEIGHT} lines`, x, y);
     y += lh + 4;
     const rows = [
       ["recv", rx ? rx.framesIn : 0],
@@ -2631,7 +2663,7 @@ registerProcessor('capture', Capture);`;
     const now = nowMs();
     if (!finished || now - finishedMs > 6e3) return;
     gfx.setFont(fontUi);
-    const t = isAnim() ? `Received "${name}"   ${animFramesOk()}/${animHdr > 0 ? animInfo.n : 0} frames` : isNote() ? `Received note "${name}"  ${rx.noteLen} chars` : `Received "${name}"   ${finishedLines}/${HEIGHT} lines`;
+    const t = isAnim() ? `Received "${name}"   ${animFramesOk()}/${animHdr > 0 ? animInfo.n : 0} frames` : isNote() ? `Received note "${name}"  ${noteGot}/${rx.noteLen} chars` : `Received "${name}"   ${finishedLines}/${HEIGHT} lines`;
     const w = gfx.textWidth(t) + 24, h = fontUi.height + 16, x = LCD_COLUMNS - w >> 1, y = LCD_ROWS - h - 14;
     gfx.fillRoundRect(x, y, w, h, h >> 1, BLACK);
     gfx.drawText(t, x + 12, y + 8, true);

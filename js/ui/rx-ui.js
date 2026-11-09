@@ -34,6 +34,33 @@ const tinyBits = new Uint8Array(P.TINY_BYTES), tinyHave = new Uint8Array(P.TINY_
 const consoleBits = new Uint8Array(P.PREVIEW_BYTES); // 80x48 preview shown in the console icon
 const noteBuf = new Uint8Array(P.NOTE_MAX_CHARS + 64);
 let noteText = '';
+// Which note chunks arrived (a lost chunk leaves zeros in noteBuf; the text used to end at the
+// first gap, so a note whose first chunk was lost came out empty) and how many bytes.
+let noteHave = new Set(), noteGot = 0;
+// The note as shown: received chunks in order, each run of lost ones as " [...] ", UTF-8 torn at a
+// gap's edges dropped (a chunk is NOTE_CHUNK bytes, so a Cyrillic letter can straddle two).
+function buildNoteText() {
+  let total = rx && rx.noteLen > 0 ? rx.noteLen : 0;
+  if (!total) for (const c of noteHave) total = Math.max(total, (c + 1) * P.NOTE_CHUNK);
+  const chunks = Math.ceil(Math.min(total, P.NOTE_MAX_CHARS) / P.NOTE_CHUNK), out = [];
+  const gap = new TextEncoder().encode(' [...] ');
+  for (let c = 0; c < chunks; c++) {
+    if (!noteHave.has(c)) { if (c === 0 || noteHave.has(c - 1)) out.push(...gap); continue; }
+    let a = c * P.NOTE_CHUNK, b = Math.min(a + P.NOTE_CHUNK, total);
+    if (c > 0 && !noteHave.has(c - 1)) while (a < b && (noteBuf[a] & 0xc0) === 0x80) a++;
+    if (c + 1 < chunks && !noteHave.has(c + 1)) {
+      for (let k = b - 1; k >= a && k >= b - 3; k--) {
+        const u = noteBuf[k];
+        if ((u & 0xc0) === 0x80) continue;
+        const need = u >= 0xf0 ? 4 : u >= 0xe0 ? 3 : u >= 0xc0 ? 2 : 1;
+        if (b - k < need) b = k;
+        break;
+      }
+    }
+    for (let k = a; k < b; k++) if (noteBuf[k]) out.push(noteBuf[k]);
+  }
+  return new TextDecoder().decode(new Uint8Array(out));
+}
 let previewChunks = 0, previewDirty = false;
 let segsDone = 0, linesReached = 0, revealed = 0, finishedLines = 0;
 let started = false, finished = false, rxPaused = false;
@@ -247,7 +274,7 @@ function drawAnimReceive(now, enow) {
 
 function clearImage() {
   animReset();
-  noteBuf.fill(0); noteText = ''; noteScroll = 0; noteFollow = true;
+  noteBuf.fill(0); noteText = ''; noteHave = new Set(); noteGot = 0; noteScroll = 0; noteFollow = true;
   img.fill(0); disp.fill(0); segSeen.fill(0);
   previewBits.fill(0); previewHave.fill(0); tinyBits.fill(0); tinyHave.fill(0);
   previewChunks = 0; previewRefresh();
@@ -300,8 +327,12 @@ function makeRx() {
       if (rx.anim) { lastDataMs = nowMs(); lastBlockKind = 'data'; return; } // bytes stay in rx.data
       const off = chunk * P.NOTE_CHUNK;
       for (let k = 0; k < nb && off + k < P.NOTE_MAX_CHARS; k++) noteBuf[off + k] = buf[k];
-      let z = noteBuf.indexOf(0); if (z < 0) z = noteBuf.length;
-      noteText = new TextDecoder().decode(noteBuf.subarray(0, z));
+      if (!noteHave.has(chunk)) {
+        noteHave.add(chunk);
+        const len = rx.noteLen > 0 ? rx.noteLen : P.NOTE_MAX_CHARS;
+        noteGot += Math.max(0, Math.min(nb, len - off));
+      }
+      noteText = buildNoteText();
       lastBlockKind = 'data';
     },
     onControl(sub, arg) {
@@ -670,12 +701,12 @@ function drawPanel() {
   y += fontUi.height + 9;
   const barW = PANEL_W - 16;
   gfx.drawRoundRect(x, y, barW, 8, 4, 1, BLACK);
-  const got = isAnim() ? (animHdr > 0 ? animDec.framesDone : 0) : isNote() ? noteText.length : segsDone;
+  const got = isAnim() ? (animHdr > 0 ? animDec.framesDone : 0) : isNote() ? noteGot : segsDone;
   const tot = isAnim() ? (animHdr > 0 ? animInfo.n : 1) : isNote() ? (rx.noteLen > 0 ? rx.noteLen : Math.max(1, got)) : P.NUM_SEGS;
   const fill = Math.min(barW - 2, Math.trunc((barW - 2) * got / tot));
   if (fill > 0) gfx.fillRoundRect(x + 1, y + 1, fill, 6, 3, BLACK);
   y += 11;
-  gfx.drawText(isAnim() ? `${got} / ${animHdr > 0 ? animInfo.n : 0} frames` : isNote() ? `${noteText.length} / ${rx.noteLen} chars` : `${segsDone >> 1} / ${P.HEIGHT} lines`, x, y);
+  gfx.drawText(isAnim() ? `${got} / ${animHdr > 0 ? animInfo.n : 0} frames` : isNote() ? `${noteGot} / ${rx.noteLen} chars` : `${segsDone >> 1} / ${P.HEIGHT} lines`, x, y);
   y += lh + 4;
   const rows = [['recv', rx ? rx.framesIn : 0], ['preview', previewChunks], ['frames ok/bad', rx ? `${rx.framesOk}/${rx.framesBad}` : '0/0'],
     ['rs fixed/fixed', rx ? `${rx.rsCorrected}/${rx.framesRepaired}` : '0/0'], ['flywheel', demod ? demod.flywheelFrames : 0]];
@@ -708,7 +739,7 @@ function drawFinishedBanner() {
   if (!finished || now - finishedMs > 6000) return;
   gfx.setFont(fontUi);
   const t = isAnim() ? `Received "${name}"   ${animFramesOk()}/${animHdr > 0 ? animInfo.n : 0} frames`
-    : isNote() ? `Received note "${name}"  ${rx.noteLen} chars` : `Received "${name}"   ${finishedLines}/${P.HEIGHT} lines`;
+    : isNote() ? `Received note "${name}"  ${noteGot}/${rx.noteLen} chars` : `Received "${name}"   ${finishedLines}/${P.HEIGHT} lines`;
   const w = gfx.textWidth(t) + 24, h = fontUi.height + 16, x = (LCD_COLUMNS - w) >> 1, y = LCD_ROWS - h - 14;
   gfx.fillRoundRect(x, y, w, h, h >> 1, BLACK);
   gfx.drawText(t, x + 12, y + 8, true);
