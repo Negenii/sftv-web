@@ -11,6 +11,7 @@ import { TxAudio } from '../audio/tx-audio.js';
 import { U8g2Font } from './u8g2font.js';
 import { HAXRCORP } from './font-haxrcorp.js';
 import { DOLPHIN_DONE } from './icon-dolphin-done.js';
+import { SAMPLES } from './samples.js';
 
 const lcd = document.getElementById('lcd');
 const g = lcd.getContext('2d');
@@ -27,7 +28,10 @@ function checkerBits() {
     if (((x >> 4) + (y >> 4)) & 1) b[y * P.LINE_BYTES + (x >> 3)] |= 0x80 >> (x & 7);
   return b;
 }
-images.push({ name: 'checker', bits: checkerBits() });
+images.push({ name: 'Checker', bits: checkerBits() });
+// the sample pictures that come with the Flipper app (js/ui/samples.js)
+for (const s of SAMPLES) images.push({ name: s.name, bits: Uint8Array.from(atob(s.bits), (c) => c.charCodeAt(0)) });
+const SAMPLE_COUNT = images.length; // the chips cover these; loaded pictures come after
 
 const rgba = new Uint8ClampedArray(P.WIDTH * P.HEIGHT * 4);
 // The real Flipper LCD is 128x64: the picture goes out as the same 80x48 dithered sheet the
@@ -162,6 +166,41 @@ async function decodeImage(file) {
   } catch (e) { return null; } finally { URL.revokeObjectURL(url); }
 }
 
+// Sample chips: a thumbnail and a name for each built-in picture; the one on screen is lit.
+const chipsEl = document.getElementById('samples');
+const chips = [];
+function markChip() { chips.forEach((c, i) => c.classList.toggle('on', i === index)); }
+function pick(i) {
+  if (tx.playing) { // a sample while something is on the air: this one now instead
+    const was = sending ? `"${images[sendingIndex].name}"` : noteSending ? 'the note' : 'the transmission';
+    stopTx(); index = i; markChip();
+    say(`Stopped ${was}, sending "${nameOf()}".`);
+    send();
+    return;
+  }
+  index = i; markChip(); drawImage(images[index].bits);
+  say(`Picked "${nameOf()}". Press Send to transmit it.`);
+}
+if (chipsEl) {
+  const big = document.createElement('canvas'); big.width = P.WIDTH; big.height = P.HEIGHT;
+  const bg = big.getContext('2d'), id = bg.createImageData(P.WIDTH, P.HEIGHT);
+  for (let i = 0; i < SAMPLE_COUNT; i++) {
+    const b = images[i].bits;
+    for (let y = 0; y < P.HEIGHT; y++) for (let x = 0; x < P.WIDTH; x++) {
+      const v = (b[y * P.LINE_BYTES + (x >> 3)] >> (7 - (x & 7))) & 1 ? 0 : 255, o = (y * P.WIDTH + x) * 4;
+      id.data[o] = id.data[o + 1] = id.data[o + 2] = v; id.data[o + 3] = 255;
+    }
+    bg.putImageData(id, 0, 0);
+    const btn = document.createElement('button'); btn.className = 'act sample'; btn.type = 'button';
+    const th = document.createElement('canvas'); th.width = 60; th.height = 36;
+    const tg = th.getContext('2d'); tg.imageSmoothingQuality = 'high'; tg.drawImage(big, 0, 0, 60, 36);
+    const label = document.createElement('span'); label.textContent = images[i].name;
+    btn.append(th, label); btn.addEventListener('click', () => pick(i));
+    chipsEl.append(btn); chips.push(btn);
+  }
+  markChip();
+}
+
 async function loadFile(file) {
   const bmp = await decodeImage(file);
   if (!bmp) { say(`Can't open "${file.name}": this browser can't read that file as a picture.`); return; }
@@ -177,7 +216,7 @@ async function loadFile(file) {
   const bits = ditherRGBA(id.data);
   const was = sending ? images[sendingIndex].name : noteSending ? 'the note' : null;
   images.push({ name: (file.name || 'image').replace(/\.[^.]+$/, '').slice(0, P.NAME_MAX), bits });
-  index = images.length - 1;
+  index = images.length - 1; markChip();
   if (tx.playing) {
     // a new picture while one is on the air: this one now instead
     stopTx();
@@ -263,7 +302,7 @@ tick();
 const act = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
 const browse = (step) => {
   if (tx.playing) { say('Stop the transmission to switch pictures, or load another picture to replace it.'); return; }
-  index = (index + step + images.length) % images.length; drawImage(images[index].bits); say('');
+  index = (index + step + images.length) % images.length; drawImage(images[index].bits); markChip(); say('');
 };
 act('right', () => browse(1));
 act('left', () => browse(-1));
